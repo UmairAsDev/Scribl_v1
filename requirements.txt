@@ -24,3 +24,4 @@ python-multipart == 0.0.20
 uvicorn ==0.34.2
 fastapi-login ==1.10.3
 python-nginx
+itsdangerous
