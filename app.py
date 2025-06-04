@@ -92,12 +92,14 @@ templates.env.filters["nl2br"] = nl2br
 
 
 allowed_hosts = [
-    "http://0.0.0.0:5000",
+    "0.0.0.0",
     "localhost",
     "127.0.0.1",
     "js-projects-scribl.wjhk3s.easypanel.host",
-    "https://scribl-v1.onrender.com"
+    "scribl-v1.onrender.com",
+    "*.onrender.com",  
 ]
+
 
 # Use one HTTPS redirect middleware
 class PermanentHTTPSRedirectMiddleware(HTTPSRedirectMiddleware):
@@ -127,7 +129,10 @@ def is_local_development(request: Request = None):
 
 
 def is_production(request: Request = None):
-    production_hosts = ["js-projects-scribl.wjhk3s.easypanel.host", "https://scribl-v1.onrender.com"]
+    production_hosts = [
+        "js-projects-scribl.wjhk3s.easypanel.host",
+        "scribl-v1.onrender.com"
+    ]
     if request:
         host = request.headers.get("host", "").split(":")[0]
         return host in production_hosts
@@ -146,6 +151,13 @@ middleware = [
         same_site="lax",
         https_only=True,
         max_age=3600 * 24,
+    ),
+    Middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
     ),
 ]
 
@@ -176,19 +188,6 @@ async def security_headers(request: Request, call_next):
     return response
 
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost",
-        "http://127.0.0.1",
-        "http://0.0.0.0:5000",
-        "https://js-projects-scribl.wjhk3s.easypanel.host",
-        "https://scribl-v1.onrender.com"
-    ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 
 class NoCacheStaticMiddleware(BaseHTTPMiddleware):
@@ -228,19 +227,6 @@ async def validate_csrf_token(request: Request, token: str):
     request.session["csrf_token"] = secrets.token_urlsafe(32)
 
 
-@app.middleware("http")
-async def redirect_https_if_needed(request: Request, call_next):
-    # Skip redirection for local development
-    if is_local_development(request):
-        return await call_next(request)
-
-    # Check if we're already using HTTPS
-    if request.url.scheme == "https":
-        return await call_next(request)
-
-    # Redirect to HTTPS version of the same URL
-    https_url = request.url.replace(scheme="https")
-    return RedirectResponse(https_url, status_code=301)
 
 
 # Static files with no-cache headers
