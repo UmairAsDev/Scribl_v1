@@ -158,23 +158,19 @@ if not is_local_development():
 
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
-    logger.info(f"Request: {request.method} {request.url}")
-
     response = await call_next(request)
 
     if is_production(request):
-        response.headers.update(
-            {
-                "Content-Security-Policy": "upgrade-insecure-requests",
-                "X-Content-Type-Options": "nosniff",
-                "X-Frame-Options": "DENY",
-            }
-        )
+        response.headers.update({
+            "Content-Security-Policy": "upgrade-insecure-requests",
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "DENY",
+        })
 
-    if is_production(request) and request.url.scheme == "https":
-        response.headers["Strict-Transport-Security"] = (
-            "max-age=63072000; includeSubDomains; preload"
-        )
+        if request.url.scheme == "https":
+            response.headers["Strict-Transport-Security"] = (
+                "max-age=63072000; includeSubDomains; preload"
+            )
 
     return response
 
@@ -205,7 +201,6 @@ class NoCacheStaticMiddleware(BaseHTTPMiddleware):
                 }
             )
         return response
-
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 app.add_middleware(NoCacheStaticMiddleware)
