@@ -6,14 +6,14 @@ from fastapi import (
     UploadFile,
     File,
     Query,
-    status
+    status,
 )
 from sqlalchemy import text
 from PIL import Image, ImageEnhance, ImageFilter
 from fastapi.responses import FileResponse, RedirectResponse, JSONResponse
 from starlette.middleware.sessions import SessionMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware 
+from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.templating import Jinja2Templates
@@ -79,45 +79,42 @@ import pandas as pd
 from fastapi.middleware.cors import CORSMiddleware
 
 
-
-
-
 def nl2br(value: str):
     return Markup("<br>".join(escape(value).splitlines()))
-
-
 
 
 logger = logging.getLogger(__name__)
 
 
 templates = Jinja2Templates(directory="templates")
-templates.env.filters["nl2br"] = nl2br 
+templates.env.filters["nl2br"] = nl2br
+
 
 
 allowed_hosts = [
     "0.0.0.0",
     "localhost",
     "127.0.0.1",
-    "js-projects-scribl.wjhk3s.easypanel.host"
+    "js-projects-scribl.wjhk3s.easypanel.host",
 ]
 
-
+# Use one HTTPS redirect middleware
 class PermanentHTTPSRedirectMiddleware(HTTPSRedirectMiddleware):
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http":
             headers = dict(scope["headers"])
             host = headers.get(b"host", b"").decode("latin-1")
-            if not host.startswith(("localhost", "127.0.0.1")):
+            if not is_local_development():  # only redirect if NOT local
                 scheme = scope.get("scheme", "http")
                 if scheme != "https":
                     url = f"https://{host}{scope['path']}"
                     if scope["query_string"]:
                         url += f"?{scope['query_string'].decode()}"
-                    response = RedirectResponse(url, status_code=301)  
+                    response = RedirectResponse(url, status_code=301)
                     await response(scope, receive, send)
                     return
         await self.app(scope, receive, send)
+
 
 
 def is_local_development(request: Request = None):
@@ -127,30 +124,33 @@ def is_local_development(request: Request = None):
         return host in local_hosts
     return os.environ.get("ENVIRONMENT", "development") != "production"
 
+
 def is_production(request: Request = None):
     production_hosts = ["js-projects-scribl.wjhk3s.easypanel.host"]
     if request:
-        host = request.headers.get("host", "").split(":")[0]  
+        host = request.headers.get("host", "").split(":")[0]
         return host in production_hosts
     return False
+
 
 templates.env.globals.update(is_production=is_production)
 
 
 middleware = [
     Middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts),
-    Middleware(SessionMiddleware,
+    Middleware(
+        SessionMiddleware,
         secret_key=env_settings.SESSION_SECRET,
         session_cookie="sessionid",
         same_site="lax",
-        https_only=not is_local_development(),
-        max_age=3600*24
-    )
+        https_only=True,
+        max_age=3600 * 24,
+    ),
 ]
 
 
-app = FastAPI(middleware=middleware)
 
+app = FastAPI(middleware=middleware)
 
 if not is_local_development():
     app.add_middleware(PermanentHTTPSRedirectMiddleware)
@@ -158,14 +158,24 @@ if not is_local_development():
 
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
+    logger.info(f"Request: {request.method} {request.url}")
+
     response = await call_next(request)
-    if not is_local_development(request):
-        response.headers.update({
-            "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
-            "Content-Security-Policy": "upgrade-insecure-requests",
-            "X-Content-Type-Options": "nosniff",
-            "X-Frame-Options": "DENY"
-        })
+
+    if is_production(request):
+        response.headers.update(
+            {
+                "Content-Security-Policy": "upgrade-insecure-requests",
+                "X-Content-Type-Options": "nosniff",
+                "X-Frame-Options": "DENY",
+            }
+        )
+
+    if is_production(request) and request.url.scheme == "https":
+        response.headers["Strict-Transport-Security"] = (
+            "max-age=63072000; includeSubDomains; preload"
+        )
+
     return response
 
 
@@ -175,7 +185,7 @@ app.add_middleware(
         "http://localhost",
         "http://127.0.0.1",
         "http://0.0.0.0",
-        "https://js-projects-scribl.wjhk3s.easypanel.host"
+        "https://js-projects-scribl.wjhk3s.easypanel.host",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -187,10 +197,15 @@ class NoCacheStaticMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         response = await call_next(request)
         if request.url.path.startswith("/static/"):
-            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
-            response.headers["Pragma"] = "no-cache"
-            response.headers["Expires"] = "0"
+            response.headers.update(
+                {
+                    "Cache-Control": "no-store, no-cache, must-revalidate",
+                    "Pragma": "no-cache",
+                    "Expires": "0",
+                }
+            )
         return response
+
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 app.add_middleware(NoCacheStaticMiddleware)
@@ -201,21 +216,36 @@ async def get_csrf_token(request: Request) -> str:
         request.session["csrf_token"] = secrets.token_urlsafe(32)
     return request.session["csrf_token"]
 
+
 async def validate_csrf_token(request: Request, token: str):
     session_token = request.session.get("csrf_token")
     if not session_token:
         raise HTTPException(status_code=403, detail="Missing CSRF token in session")
-    
+
     if len(token) != len(session_token):
         raise HTTPException(status_code=403, detail="Invalid CSRF token length")
-    
+
     if not secrets.compare_digest(token, session_token):
         raise HTTPException(status_code=403, detail="CSRF tokens do not match")
-    
 
     request.session["csrf_token"] = secrets.token_urlsafe(32)
-    
-    
+
+
+@app.middleware("http")
+async def redirect_https_if_needed(request: Request, call_next):
+    # Skip redirection for local development
+    if is_local_development(request):
+        return await call_next(request)
+
+    # Check if we're already using HTTPS
+    if request.url.scheme == "https":
+        return await call_next(request)
+
+    # Redirect to HTTPS version of the same URL
+    https_url = request.url.replace(scheme="https")
+    return RedirectResponse(https_url, status_code=301)
+
+
 # Static files with no-cache headers
 @app.get("/static/{filename:path}", name="static")
 async def static_files(filename: str):
@@ -229,7 +259,6 @@ async def static_files(filename: str):
         "Expires": "0",
     }
     return FileResponse(static_file_path, headers=headers)
-
 
 
 # Add Student
@@ -285,7 +314,7 @@ async def add_student(
 
 @app.get("/get_students/{class_id}", response_class=JSONResponse)
 async def get_students(
-    request : Request,
+    request: Request,
     class_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -316,40 +345,56 @@ async def get_students(
     return student_data
 
 
-
-@app.post('/student/{student_id}/delete')
-def delete_student(request:Request, student_id:int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+@app.post("/student/{student_id}/delete")
+def delete_student(
+    request: Request,
+    student_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     from models import Student
+
     student = db.query(Student).get(student_id)
 
     # Check if current user is the teacher of this student's class
     if student.class_group.teacher_id != current_user.id:
-        return JSONResponse(status_code=403, content={'error': 'Unauthorized'})
+        return JSONResponse(status_code=403, content={"error": "Unauthorized"})
 
     try:
         db.delete(student)
         db.commit()
-        request.session["flash"]=('Student deleted successfully!', 'success')
-        return JSONResponse(status_code=200, content={'success': True})
+        request.session["flash"] = ("Student deleted successfully!", "success")
+        return JSONResponse(status_code=200, content={"success": True})
     except Exception as e:
         logger.error(f"Error deleting student: {str(e)}")
         db.rollback()
-        return JSONResponse(status_code=500, content={'error': 'Failed to delete student'})
+        return JSONResponse(
+            status_code=500, content={"error": "Failed to delete student"}
+        )
 
 
-
-@app.post('/process_image',)
-async def process_image(request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+@app.post(
+    "/process_image",
+)
+async def process_image(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """Process uploaded writing sample image and return analysis."""
     try:
         # Get the base64 image data from the request
         data = await request.json()
-        if not data or 'image' not in data:
-            return JSONResponse(status_code= 400, content={'error': 'No image data provided'})
+        if not data or "image" not in data:
+            return JSONResponse(
+                status_code=400, content={"error": "No image data provided"}
+            )
 
-        base64_image = data['image'].split(',')[1]  # Remove the data:image/jpeg;base64, prefix
-        assignment_id = data.get('assignment_id')
-        student_id = data.get('student_id')
+        base64_image = data["image"].split(",")[
+            1
+        ]  # Remove the data:image/jpeg;base64, prefix
+        assignment_id = data.get("assignment_id")
+        student_id = data.get("student_id")
 
         # Get assignment if ID provided
         assignment = None
@@ -362,16 +407,16 @@ async def process_image(request: Request, db: Session = Depends(get_db), current
         if analysis_result:
             # Create new writing record
             writing_sample = Writing(
-                filename=data.get('filename', 'uploaded_image.jpg'),
+                filename=data.get("filename", "uploaded_image.jpg"),
                 image_data=base64_image,
                 analysis_result=json.dumps(analysis_result),
-                text_content=analysis_result.get('extracted_text', ''),
-                writing_age=analysis_result.get('age', ''),
-                feedback=analysis_result.get('feedback', ''),
+                text_content=analysis_result.get("extracted_text", ""),
+                writing_age=analysis_result.get("age", ""),
+                feedback=analysis_result.get("feedback", ""),
                 user_id=current_user.id,
                 assignment_id=assignment_id if assignment_id else None,
                 student_id=student_id if student_id else None,
-                created_at=datetime.now()
+                created_at=datetime.now(),
             )
 
             # Save to database
@@ -381,50 +426,57 @@ async def process_image(request: Request, db: Session = Depends(get_db), current
             # Check if this is the user's first writing analysis
             try:
                 # Get all writings connected to students in classes taught by this teacher
-                writing_count = db.query(Writing).join(Student).join(Class).filter(
-                    Class.teacher_id == current_user.id
-                ).count()
+                writing_count = (
+                    db.query(Writing)
+                    .join(Student)
+                    .join(Class)
+                    .filter(Class.teacher_id == current_user.id)
+                    .count()
+                )
 
                 if writing_count == 1:  # This means it's their first writing
                     success = tag_user_first_analysis(current_user.email)
                     if success:
-                        logger.info(f"Successfully tagged user {current_user.email} with 'Scribl Used'")
+                        logger.info(
+                            f"Successfully tagged user {current_user.email} with 'Scribl Used'"
+                        )
                     else:
-                        logger.warning(f"Failed to tag user {current_user.email} with 'Scribl Used'")
+                        logger.warning(
+                            f"Failed to tag user {current_user.email} with 'Scribl Used'"
+                        )
             except Exception as e:
                 logger.error(f"Error checking first writing analysis: {str(e)}")
                 # Continue with the response even if tagging fails
 
-            return JSONResponse({
-                "request" : request, 
-                'status': 'success',
-                'analysis': analysis_result,
-                'writing_id': writing_sample.id
-            })
+            return JSONResponse(
+                {
+                    "request": request,
+                    "status": "success",
+                    "analysis": analysis_result,
+                    "writing_id": writing_sample.id,
+                }
+            )
         else:
-            return JSONResponse(status_code= 500, content={'error': 'Failed to analyze writing'})
+            return JSONResponse(
+                status_code=500, content={"error": "Failed to analyze writing"}
+            )
 
     except Exception as e:
         logger.error(f"Error processing image: {str(e)}")
-        return JSONResponse(status_code= 500, content={'error': str(e)})
-
-
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 
 @app.get("/login")
 async def show_login_form(request: Request):
     csrf_token = await get_csrf_token(request)
     response = templates.TemplateResponse(
-        "login.html",
-        {"request": request, "csrf_token": csrf_token}
+        "login.html", {"request": request, "csrf_token": csrf_token}
     )
     # Explicitly set cookie headers
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
     return response
-
-
 
 
 @app.post("/login", response_class=HTMLResponse)
@@ -437,18 +489,22 @@ async def login(
 ):
     # Validate CSRF token first
     await validate_csrf_token(request, csrf_token)
-    
+
     email = email.lower()
     user = db.query(User).filter_by(email=email).first()
 
     try:
         if not user:
             logger.warning(f"Failed login attempt for user: {email}")
-            return RedirectResponse(url="/login?error=Invalid+email+or+password", status_code=HTTP_302_FOUND)
+            return RedirectResponse(
+                url="/login?error=Invalid+email+or+password", status_code=HTTP_302_FOUND
+            )
 
         if not user.check_password(password):
             logger.warning(f"Failed login attempt for user: {email}")
-            return RedirectResponse(url="/login?error=Invalid+email+or+password", status_code=HTTP_302_FOUND)
+            return RedirectResponse(
+                url="/login?error=Invalid+email+or+password", status_code=HTTP_302_FOUND
+            )
 
         # Successful login
         db.commit()
@@ -456,17 +512,15 @@ async def login(
         request.session["user_id"] = user.id
         request.session["_fresh"] = True  # Mark session as fresh
         logger.info(f"Successful login for user: {email}")
-        
+
         return RedirectResponse(url="/home", status_code=HTTP_302_FOUND)
 
     except Exception as e:
         logger.error(f"Error during login: {e}")
         return RedirectResponse(
             url="/login?error=An+error+occurred+during+login",
-            status_code=HTTP_302_FOUND
+            status_code=HTTP_302_FOUND,
         )
-
-
 
 
 @app.post("/signup", response_class=HTMLResponse)
@@ -533,7 +587,7 @@ async def signup(
                 email=user.email, first_name=user.first_name, last_name=user.last_name
             )
             if success:
-                request.session["flash"]= ("User Created Successfully..")
+                request.session["flash"] = "User Created Successfully.."
                 logger.info(f"Successfully added {user.email} to Mailchimp audience")
             else:
                 logger.warning(f"Failed to add {user.email} to Mailchimp audience")
@@ -567,21 +621,34 @@ async def logout(request: Request, response: Response):
     return RedirectResponse(url="/login", status_code=HTTP_302_FOUND)
 
 
-
-
-@app.post('/admin/delete-user/{user_id}')
-def delete_user(user_id, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+@app.post("/admin/delete-user/{user_id}")
+def delete_user(
+    user_id,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """Delete a single user and their associated data."""
     logger.info(f"Delete user request received for user_id: {user_id}")
-    logger.info(f"Current user: {current_user.email}, is_admin: {getattr(current_user, 'is_admin', False)}")
+    logger.info(
+        f"Current user: {current_user.email}, is_admin: {getattr(current_user, 'is_admin', False)}"
+    )
 
     if current_user not in request.session:
         logger.warning("Unauthorized: User not authenticated")
-        return JSONResponse(status_code= 403, content={'error': 'Unauthorized - not authenticated'}),
+        return (
+            JSONResponse(
+                status_code=403, content={"error": "Unauthorized - not authenticated"}
+            ),
+        )
 
     if not current_user.is_admin:
         logger.warning(f"Unauthorized: User {current_user.email} is not an admin")
-        return JSONResponse(status_code=403, content={'error': 'Unauthorized - not admin'}), 
+        return (
+            JSONResponse(
+                status_code=403, content={"error": "Unauthorized - not admin"}
+            ),
+        )
 
     try:
         user_to_delete = db.query(User).get(user_id)
@@ -589,28 +656,42 @@ def delete_user(user_id, request: Request, db: Session = Depends(get_db), curren
         # Don't allow admin to delete themselves
         if user_to_delete.id == current_user.id:
             logger.warning("Attempted to delete own admin account")
-            return JSONResponse(status_code=400, content={'error': 'Cannot delete your own admin account'}), 
+            return (
+                JSONResponse(
+                    status_code=400,
+                    content={"error": "Cannot delete your own admin account"},
+                ),
+            )
 
         # Delete associated data using SQLAlchemy cascade
         db.delete(user_to_delete)
         db.commit()
 
         logger.info(f"Successfully deleted user {user_id}")
-        return JSONResponse(status_code=200, content={'message': 'User deleted successfully'}), 
+        return (
+            JSONResponse(
+                status_code=200, content={"message": "User deleted successfully"}
+            ),
+        )
 
     except Exception as e:
         logger.error(f"Error deleting user {user_id}: {str(e)}")
         db.rollback()
-        return JSONResponse(status_code=500, content={'error': 'Failed to delete user'}), 
+        return (
+            JSONResponse(status_code=500, content={"error": "Failed to delete user"}),
+        )
 
 
-
-@app.get('/admin')
-def admin_dashboard(request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+@app.get("/admin")
+def admin_dashboard(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """Admin dashboard with enhanced user metrics and management."""
     if not current_user.is_admin:
-        request.session["flash"]=('Unauthorized access')
-        return RedirectResponse(url = 'index')
+        request.session["flash"] = "Unauthorized access"
+        return RedirectResponse(url="index")
 
     try:
         # Get all teachers (non-admin users)
@@ -618,32 +699,22 @@ def admin_dashboard(request: Request, db: Session = Depends(get_db), current_use
 
         # Calculate overall metrics
         metrics = {
-            'total_users': db.query(User).count(),
-            'total_writings': db.query(Writing).count(),
-            'total_classes': db.query(Class).count(),
-            'total_students': db.query(Student).count()
+            "total_users": db.query(User).count(),
+            "total_writings": db.query(Writing).count(),
+            "total_classes": db.query(Class).count(),
+            "total_students": db.query(Student).count(),
         }
 
         logger.info(f"Admin dashboard loaded with {len(teachers)} teachers")
-        return templates.TemplateResponse('admin_dashboard.html',
-                                {
-                                    "request": request,
-                                    "teachers":teachers,
-                                    "metrics" :metrics
-                                }
-                            )
+        return templates.TemplateResponse(
+            "admin_dashboard.html",
+            {"request": request, "teachers": teachers, "metrics": metrics},
+        )
 
     except Exception as e:
         logger.error(f"Error loading admin dashboard: {str(e)}")
-        request.session["flash"]=('An error occurred while loading the dashboard')
-        return RedirectResponse(url = 'index')
-
-
-
-
-
-
-
+        request.session["flash"] = "An error occurred while loading the dashboard"
+        return RedirectResponse(url="index")
 
 
 @app.get("/wagoll_library", response_class=HTMLResponse)
@@ -1023,8 +1094,6 @@ async def export_class_data(
         raise HTTPException(status_code=500, detail="Failed to export class data")
 
 
-
-
 @app.get("/get_assignments/{class_id}", response_class=JSONResponse)
 async def get_assignments(
     class_id: int,
@@ -1051,7 +1120,7 @@ async def get_assignments(
             "title": a.title,
             "curriculum": a.curriculum,
             "genre": a.genre,
-            "created_at": a.created_at
+            "created_at": a.created_at,
         }
         for a in assignments
     ]
@@ -1228,26 +1297,41 @@ async def remove_logo(
         )
 
 
-
-@app.post('/save_to_wagoll')
-async def save_to_wagoll(request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+@app.post("/save_to_wagoll")
+async def save_to_wagoll(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """Save a writing sample as a WAGOLL example from index page."""
     try:
         data = await request.json()
-        title = data.get('title')
-        content = data.get('content')
-        explanations = data.get('explanations', '')
-        is_public = data.get('is_public', False)
-        writing_id = data.get('writing_id')
-        assignment_id = data.get('assignment_id')
+        title = data.get("title")
+        content = data.get("content")
+        explanations = data.get("explanations", "")
+        is_public = data.get("is_public", False)
+        writing_id = data.get("writing_id")
+        assignment_id = data.get("assignment_id")
 
-        logger.debug(f"WAGOLL save request received: title={title}, content length={len(content) if content else 'None'}")
+        logger.debug(
+            f"WAGOLL save request received: title={title}, content length={len(content) if content else 'None'}"
+        )
 
         if not title or not content:
-            logger.error(f"Missing required fields: title={bool(title)}, content={bool(content)}")
-            return JSONResponse(status_code=400, content={'success': False, 'error': 'Title and content are required'}), 
+            logger.error(
+                f"Missing required fields: title={bool(title)}, content={bool(content)}"
+            )
+            return (
+                JSONResponse(
+                    status_code=400,
+                    content={
+                        "success": False,
+                        "error": "Title and content are required",
+                    },
+                ),
+            )
 
-        # Import the model 
+        # Import the model
         from models import WagollExample, Writing
 
         # If we have a writing ID but no content, try to get content from the writing sample
@@ -1259,8 +1343,15 @@ async def save_to_wagoll(request: Request, db: Session = Depends(get_db), curren
 
         # Double-check content after potential retrieval
         if not content:
-            logger.error("Content still missing after attempting to retrieve from writing_id")
-            return JSONResponse(status_code=400, content={'success': False, 'error': 'Content isrequired'}),
+            logger.error(
+                "Content still missing after attempting to retrieve from writing_id"
+            )
+            return (
+                JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "Content isrequired"},
+                ),
+            )
 
         # Create the WAGOLL example
         example = WagollExample(
@@ -1270,25 +1361,21 @@ async def save_to_wagoll(request: Request, db: Session = Depends(get_db), curren
             is_public=is_public,
             assignment_id=assignment_id,
             teacher_id=current_user.id,
-            writing_id=writing_id
+            writing_id=writing_id,
         )
 
         db.add(example)
         db.commit()
         logger.debug(f"WAGOLL example saved successfully with ID: {example.id}")
 
-        return JSONResponse(content={
-            'success': True,
-            'id': example.id
-        })
+        return JSONResponse(content={"success": True, "id": example.id})
 
     except Exception as e:
         logger.error(f"Error saving WAGOLL from index: {str(e)}")
         db.rollback()
-        return JSONResponse(status_code=500,content={'success': False, 'error': str(e)})
-
-
-
+        return JSONResponse(
+            status_code=500, content={"success": False, "error": str(e)}
+        )
 
 
 # FastAPI equivalent for the /add_class endpoint and admin dashboard view
@@ -1503,35 +1590,52 @@ def export_users(
         raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}")
 
 
-@app.post('/admin/delete-users')
-def delete_users(request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+@app.post("/admin/delete-users")
+def delete_users(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """Delete multiple users and their associated data."""
     logger.info("Bulk delete users request received")
-    logger.info(f"Current user: {current_user.email}, is_admin: {getattr(current_user, 'is_admin', False)}")
+    logger.info(
+        f"Current user: {current_user.email}, is_admin: {getattr(current_user, 'is_admin', False)}"
+    )
 
-    if current_user not  in request.session:
+    if current_user not in request.session:
         logger.warning("Unauthorized: User not authenticated")
-        return JSONResponse(status_code=403, content={'error': 'Unauthorized - not authenticated'})
+        return JSONResponse(
+            status_code=403, content={"error": "Unauthorized - not authenticated"}
+        )
 
     if not current_user.is_admin:
         logger.warning(f"Unauthorized: User {current_user.email} is not an admin")
-        return JSONResponse(status_code=403, content={'error': 'Unauthorized - not admin'})
+        return JSONResponse(
+            status_code=403, content={"error": "Unauthorized - not admin"}
+        )
 
     try:
         data = request.json()
-        if not data or 'user_ids' not in data:
+        if not data or "user_ids" not in data:
             logger.warning("No user IDs provided in request")
-            return JSONResponse(status_code=400, content={'error': 'No user IDs provided'})
+            return JSONResponse(
+                status_code=400, content={"error": "No user IDs provided"}
+            )
 
-        user_ids = data['user_ids']
+        user_ids = data["user_ids"]
         if not isinstance(user_ids, list):
             logger.warning("Invalid user IDs format provided")
-            return JSONResponse(status_code=400, content={'error': 'Invalid user IDs format'})
+            return JSONResponse(
+                status_code=400, content={"error": "Invalid user IDs format"}
+            )
 
         # Don't allow admin to delete themselves
         if current_user.id in user_ids:
             logger.warning("Attempted to delete own admin account in bulk delete")
-            return JSONResponse(status_code=400, content={'error': 'Cannot delete your own admin account'})
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Cannot delete your own admin account"},
+            )
 
         # Delete users and their associated data
         deleted_count = 0
@@ -1543,14 +1647,17 @@ def delete_users(request: Request, db: Session = Depends(get_db), current_user: 
 
         db.commit()
         logger.info(f"Successfully deleted {deleted_count} users")
-        return JSONResponse(status_code=200, content={'message': f'Successfully deleted {deleted_count} users'})
+        return JSONResponse(
+            status_code=200,
+            content={"message": f"Successfully deleted {deleted_count} users"},
+        )
 
     except Exception as e:
         logger.error(f"Error deleting users: {str(e)}")
         db.rollback()
-        return JSONResponse(status_code=500, content={'error': 'Failed to delete users'})
-
-
+        return JSONResponse(
+            status_code=500, content={"error": "Failed to delete users"}
+        )
 
 
 @app.get("/teacher_activity", response_class=HTMLResponse)
@@ -2079,44 +2186,61 @@ async def submit_feedback(
 # FastAPI version of /assignment/{assignment_id}/class-feedback
 
 
-
-@app.post('/update_criteria_marks')
-async def update_criteria_marks(request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+@app.post("/update_criteria_marks")
+async def update_criteria_marks(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     try:
         logger.debug("Received criteria marks update")
         data = await request.json()
-        writing_id = data.get('writing_id')
-        updated_marks = data.get('updated_marks')
+        writing_id = data.get("writing_id")
+        updated_marks = data.get("updated_marks")
 
         if not writing_id or not updated_marks:
             logger.error("Writing ID or updated marks missing from request")
-            return JSONResponse(status_code= 400, content={'error': 'Writing ID and updated marks are required'}),
+            return (
+                JSONResponse(
+                    status_code=400,
+                    content={"error": "Writing ID and updated marks are required"},
+                ),
+            )
 
         from models import Writing, CriteriaMark, Student
+
         writing = db.query(Writing).get(writing_id)
         student = db.query(Student).get(writing.student_id)
 
         # Verify permission (teacher of the student's class)
         if student.class_group.teacher_id != current_user.id:
-            logger.warning(f"Unauthorized marks update attempt for writing {writing_id}")
-            return JSONResponse(status_code=403, content={'error': 'Unauthorized'})
+            logger.warning(
+                f"Unauthorized marks update attempt for writing {writing_id}"
+            )
+            return JSONResponse(status_code=403, content={"error": "Unauthorized"})
 
         # Get existing criteria marks
         criteria_marks = db.query(CriteriaMark).filter_by(writing_id=writing_id).all()
 
         if len(criteria_marks) != len(updated_marks):
-            logger.error(f"Mismatch in criteria marks count: DB={len(criteria_marks)}, Request={len(updated_marks)}")
-            return JSONResponse(status_code=400, content={'error': 'Criteria marks count mismatch'})
+            logger.error(
+                f"Mismatch in criteria marks count: DB={len(criteria_marks)}, Request={len(updated_marks)}"
+            )
+            return JSONResponse(
+                status_code=400, content={"error": "Criteria marks count mismatch"}
+            )
 
         # Update marks in database
         for update in updated_marks:
-            index = update.get('criteria_index')
-            new_score = update.get('score')
+            index = update.get("criteria_index")
+            new_score = update.get("score")
 
             if index < len(criteria_marks) and 0 <= new_score <= 2:
                 criteria_marks[index].score = new_score
             else:
-                logger.warning(f"Invalid index orscore: index={index}, score={new_score}")
+                logger.warning(
+                    f"Invalid index orscore: index={index}, score={new_score}"
+                )
 
         # Calculate and store total marks percentage
         total_marks = len(criteria_marks)
@@ -2132,38 +2256,47 @@ async def update_criteria_marks(request: Request, db: Session = Depends(get_db),
 
         return JSONResponse(
             status_code=200,
-            content={
-            'success': True,
-            'message': 'Criteria marks updated successfully'
-        })
+            content={"success": True, "message": "Criteria marks updated successfully"},
+        )
 
     except Exception as e:
         logger.error(f"Error updating criteria marks:{str(e)}")
         db.rollback()
-        return JSONResponse(status_code=500, content={'error': f'Failed to update criteria marks: {str(e)}'})
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Failed to update criteria marks: {str(e)}"},
+        )
 
 
-
-@app.get('/assignment/{assignment_id}/wagoll')
-async def get_wagoll(assignment_id:int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+@app.get("/assignment/{assignment_id}/wagoll")
+async def get_wagoll(
+    assignment_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """Generate a 'What A Good One Looks Like' (WAGOLL) example for the assignment."""
     from models import Assignment, Writing, CriteriaMark, Criteria
 
     # Get the assignment and verify ownership
     assignment = db.query(Assignment).get(assignment_id)
     if assignment.class_group.teacher_id != current_user.id:
-        return JSONResponse(status_code=403, content={'error': 'Unauthorized'})
+        return JSONResponse(status_code=403, content={"error": "Unauthorized"})
 
     try:
         # Collect all criteria for this assignment
         criteria_list = db.query(Criteria).filter_by(assignment_id=assignment_id).all()
 
         if not criteria_list:
-            return JSONResponse(content={
-                'title': assignment.title,
-                'exemplar': 'No success criteria found for this assignment.',
-                'explanations': ['Please add success criteria to generate a WAGOLL example.']
-            })
+            return JSONResponse(
+                content={
+                    "title": assignment.title,
+                    "exemplar": "No success criteria found for this assignment.",
+                    "explanations": [
+                        "Please add success criteria to generate a WAGOLL example."
+                    ],
+                }
+            )
 
         # Get top-scoring submissions
         submissions = db.query(Writing).filter_by(assignment_id=assignment_id).all()
@@ -2182,8 +2315,8 @@ async def get_wagoll(assignment_id:int, request: Request, db: Session = Depends(
 
             if best_example:
                 best_examples[criterion.description] = {
-                    'score': best_score,
-                    'example': best_example
+                    "score": best_score,
+                    "example": best_example,
                 }
 
         # Create the prompt for generating the WAGOLL
@@ -2215,112 +2348,130 @@ async def get_wagoll(assignment_id:int, request: Request, db: Session = Depends(
         response = client.chat.completions.create(
             model=os.getenv("MODEL_NAME"),
             messages=[
-                {
-                    "role": "system",
-                    "content": wagoll_prompt
-                },
+                {"role": "system", "content": wagoll_prompt},
                 {
                     "role": "user",
-                    "content": json.dumps({
-                        'assignment': {
-                            'title': assignment.title,
-                            'genre': assignment.genre,
-                            'curriculum': assignment.curriculum,
-                            'year_group': assignment.class_group.year_group
-                        },
-                        'criteria': [c.description for c in criteria_list],
-                        'best_examples': best_examples
-                    })
-                }
+                    "content": json.dumps(
+                        {
+                            "assignment": {
+                                "title": assignment.title,
+                                "genre": assignment.genre,
+                                "curriculum": assignment.curriculum,
+                                "year_group": assignment.class_group.year_group,
+                            },
+                            "criteria": [c.description for c in criteria_list],
+                            "best_examples": best_examples,
+                        }
+                    ),
+                },
             ],
-            response_format={"type": "json_object"}
+            response_format={"type": "json_object"},
         )
 
         # Parse the response
         wagoll = json.loads(response.choices[0].message.content)
 
         # Return the WAGOLL with explanations
-        return JSONResponse(content={
-            'title': assignment.title,
-            'exemplar': wagoll.get('exemplar', 'Error generating example.'),
-            'explanations': wagoll.get('explanations', ['No explanations provided.'])
-        })
+        return JSONResponse(
+            content={
+                "title": assignment.title,
+                "exemplar": wagoll.get("exemplar", "Error generating example."),
+                "explanations": wagoll.get(
+                    "explanations", ["No explanations provided."]
+                ),
+            }
+        )
 
     except Exception as e:
         logger.error(f"Error generating WAGOLL: {str(e)}")
-        return JSONResponse(status_code=500, content={
-            'title': assignment.title if assignment else "Unknown Assignment",
-            'exemplar': 'Error generating the WAGOLL example.',
-            'explanations': [f'Error: {str(e)}']
-        })
+        return JSONResponse(
+            status_code=500,
+            content={
+                "title": assignment.title if assignment else "Unknown Assignment",
+                "exemplar": "Error generating the WAGOLL example.",
+                "explanations": [f"Error: {str(e)}"],
+            },
+        )
 
 
-
-@app.get('/assignment/{assignment_id}/wagoll_examples')
-def get_wagoll_examples(assignment_id, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+@app.get("/assignment/{assignment_id}/wagoll_examples")
+def get_wagoll_examples(
+    assignment_id,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """Get saved WAGOLL examples for an assignment."""
     from models import Assignment, WagollExample
 
     # Get the assignment and verify ownership
     assignment = db.query(Assignment).get(assignment_id)
     if assignment.class_group.teacher_id != current_user.id:
-        return JSONResponse(status_code=403, content={'error': 'Unauthorized'})
+        return JSONResponse(status_code=403, content={"error": "Unauthorized"})
 
     try:
         # Get examples created by this teacher for this assignment
-        examples = db.query(WagollExample).filter_by(
-            assignment_id=assignment_id,
-            teacher_id=current_user.id
-        ).order_by(WagollExample.updated_at.desc()).all()
+        examples = (
+            db.query(WagollExample)
+            .filter_by(assignment_id=assignment_id, teacher_id=current_user.id)
+            .order_by(WagollExample.updated_at.desc())
+            .all()
+        )
 
         # Format response
         response = {
-            'examples': [{
-                'id': example.id,
-                'title': example.title,
-                'updated_at': example.updated_at.isoformat(),
-                'is_public': example.is_public
-            } for example in examples]
+            "examples": [
+                {
+                    "id": example.id,
+                    "title": example.title,
+                    "updated_at": example.updated_at.isoformat(),
+                    "is_public": example.is_public,
+                }
+                for example in examples
+            ]
         }
 
         return JSONResponse(response)
 
     except Exception as e:
         logger.error(f"Error getting WAGOLL examples: {str(e)}")
-        return JSONResponse(status_code=500, content={'error': str(e)})
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 
-
-@app.get('/wagoll_example/{example_id}')
-def get_wagoll_example(example_id, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+@app.get("/wagoll_example/{example_id}")
+def get_wagoll_example(
+    example_id,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """Get a specific WAGOLL example."""
     from models import WagollExample
 
     # Get the example and verify ownership
     example = db.query(WagollExample).get(example_id)
     if example.teacher_id != current_user.id and not example.is_public:
-        return JSONResponse(status_code=403, content={'error': 'Unauthorized'})
+        return JSONResponse(status_code=403, content={"error": "Unauthorized"})
 
     try:
         # Format response
         response = {
-            'id': example.id,
-            'title': example.title,
-            'content': example.content,
-            'explanations': example.explanations,
-            'is_public': example.is_public,
-            'assignment_id': example.assignment_id,
-            'assignment_title': example.assignment.title if example.assignment else None,
-            'created_at': example.created_at,
-            'updated_at': example.updated_at
+            "id": example.id,
+            "title": example.title,
+            "content": example.content,
+            "explanations": example.explanations,
+            "is_public": example.is_public,
+            "assignment_id": example.assignment_id,
+            "assignment_title": (
+                example.assignment.title if example.assignment else None
+            ),
+            "created_at": example.created_at,
+            "updated_at": example.updated_at,
         }
 
         return JSONResponse(response)
 
     except Exception as e:
         logger.error(f"Error getting WAGOLL example: {str(e)}")
-        return JSONResponse(status_code=500, content={'error': str(e)})
-
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 
 @app.get("/assignment/{assignment_id}/class-feedback")
@@ -2882,7 +3033,7 @@ async def student_portfolio(
             if current_index is not None
             else None
         )
- 
+
         return templates.TemplateResponse(
             "student_portfolio_new_temp.html",
             context={
@@ -3054,18 +3205,19 @@ async def update_writing_filename(
         return RedirectResponse(url="/", status_code=303)
 
 
-
 logger = logging.getLogger(__name__)
+
 
 class BulkDeleteRequest(BaseModel):
     writing_ids: List[int]
+
 
 @app.post("/writing/bulk_delete")
 async def bulk_delete_writing(
     request: Request,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
-    writing_ids: Optional[Union[List[int], None]] = Form(None)
+    writing_ids: Optional[Union[List[int], None]] = Form(None),
 ):
     try:
         if request.headers.get("content-type", "").startswith("application/json"):
@@ -3076,20 +3228,29 @@ async def bulk_delete_writing(
             writing_ids = form.getlist("writing_ids")
 
         if not writing_ids:
-            return JSONResponse({"error": "No writing samples selected"}, status_code=status.HTTP_400_BAD_REQUEST)
+            return JSONResponse(
+                {"error": "No writing samples selected"},
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
 
         # Fetch writings
         writings = db.query(Writing).filter(Writing.id.in_(writing_ids)).all()
 
         if not writings:
-            return JSONResponse({"error": "No matching writing samples found"}, status_code=status.HTTP_404_NOT_FOUND)
+            return JSONResponse(
+                {"error": "No matching writing samples found"},
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
 
         student_id = writings[0].student_id if writings else None
 
         for writing in writings:
             student = db.query(Student).filter_by(id=writing.student_id).first()
             if not student or student.class_group.teacher_id != current_user.id:
-                return JSONResponse({"error": "Unauthorized access to one or more writing samples"}, status_code=status.HTTP_403_FORBIDDEN)
+                return JSONResponse(
+                    {"error": "Unauthorized access to one or more writing samples"},
+                    status_code=status.HTTP_403_FORBIDDEN,
+                )
             db.delete(writing)
 
         db.commit()
@@ -3099,13 +3260,18 @@ async def bulk_delete_writing(
             return JSONResponse({"success": True}, status_code=status.HTTP_200_OK)
         else:
             redirect_url = f"/student/{student_id}/portfolio" if student_id else "/"
-            return RedirectResponse(url=redirect_url, status_code=status.HTTP_303_SEE_OTHER)
+            return RedirectResponse(
+                url=redirect_url, status_code=status.HTTP_303_SEE_OTHER
+            )
 
     except Exception as e:
         logger.error(f"Error bulk deleting writing samples: {str(e)}")
         db.rollback()
         if request.headers.get("content-type", "").startswith("application/json"):
-            return JSONResponse({"error": "Failed to delete writing samples"}, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return JSONResponse(
+                {"error": "Failed to delete writing samples"},
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
         else:
             return RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
 
@@ -3210,27 +3376,36 @@ def delete_student(
         )
 
 
-@app.post('/wagoll_example/save')
-async def save_wagoll_example(request: Request, db: Session = Depends(get_db), current_user:User = Depends(get_current_user)):
+@app.post("/wagoll_example/save")
+async def save_wagoll_example(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """Save a WAGOLL example."""
     from models import WagollExample, Assignment
 
     try:
         data = await request.json()
-        assignment_id = data.get('assignment_id')
-        title = data.get('title')
-        content = data.get('content')
-        explanations = data.get('explanations')
-        is_public = data.get('is_public', False)
+        assignment_id = data.get("assignment_id")
+        title = data.get("title")
+        content = data.get("content")
+        explanations = data.get("explanations")
+        is_public = data.get("is_public", False)
 
         if not title or not content:
-            return JSONResponse(status_code=400, content={'success': False, 'error': 'Title and content are required'})
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": "Title and content are required"},
+            )
 
         # If assignment_id is provided, verify ownership
         if assignment_id:
             assignment = db.query(Assignment).get(assignment_id)
             if not assignment or assignment.class_group.teacher_id != current_user.id:
-                return JSONResponse(status_code=403, content={'success': False, 'error': 'Unauthorized'})
+                return JSONResponse(
+                    status_code=403, content={"success": False, "error": "Unauthorized"}
+                )
 
         # Create the WAGOLL example
         example = WagollExample(
@@ -3239,44 +3414,46 @@ async def save_wagoll_example(request: Request, db: Session = Depends(get_db), c
             explanations=explanations,
             is_public=is_public,
             assignment_id=assignment_id,
-            teacher_id=current_user.id
+            teacher_id=current_user.id,
         )
 
         db.add(example)
         db.commit()
 
-        return JSONResponse(content={
-            'success': True,
-            'id': example.id
-        })
+        return JSONResponse(content={"success": True, "id": example.id})
 
     except Exception as e:
         logger.error(f"Error saving WAGOLL example: {str(e)}")
         db.rollback()
-        return JSONResponse(status_code=500, content={'success': False, 'error': str(e)})
+        return JSONResponse(
+            status_code=500, content={"success": False, "error": str(e)}
+        )
 
 
-@app.post('/wagoll_example/{example_id}/delete')
-def delete_wagoll_example(example_id, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+@app.post("/wagoll_example/{example_id}/delete")
+def delete_wagoll_example(
+    example_id,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """Delete a WAGOLL example."""
     from models import WagollExample
 
     # Get the example and verify ownership
     example = db.query(WagollExample).get(example_id)
     if example.teacher_id != current_user.id:
-        return JSONResponse(status_code=403, content={'error': 'Unauthorized'})
+        return JSONResponse(status_code=403, content={"error": "Unauthorized"})
 
     try:
         db.delete(example)
         db.commit()
 
-        return JSONResponse(status_code=200, content={'success': True})
+        return JSONResponse(status_code=200, content={"success": True})
 
     except Exception as e:
         logger.error(f"Error deleting WAGOLL example: {str(e)}")
         db.rollback()
-        return JSONResponse(status_code=500, content={'error': str(e)})
-
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 
 @app.get("/assignments", response_class=HTMLResponse)
@@ -3289,9 +3466,6 @@ async def assignments(
     )
 
 
-
-
-
 @app.post("/class/{class_id}/assignments/new")
 async def create_assignment(
     class_id: int,
@@ -3302,7 +3476,7 @@ async def create_assignment(
     criteria_description: List[str] = Form(None),
     request: Request = None,
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user)
+    current_user=Depends(get_current_user),
 ):
     class_obj = db.query(Class).filter(Class.id == class_id).first()
     if not class_obj:
@@ -3312,32 +3486,29 @@ async def create_assignment(
         raise HTTPException(status_code=403, detail="Not authorized")
 
     logger.debug(f"Creating assignment for class {class_id}")
-    
+
     form = AssignmentForm(
-        title=title,
-        curriculum=curriculum,
-        genre=genre,
-        custom_genre=custom_genre
+        title=title, curriculum=curriculum, genre=genre, custom_genre=custom_genre
     )
 
     if not criteria_description:
-        return templates.TemplateResponse("create_assignment.html", {
-            "request": request,
-            "form": form,
-            "class_obj": class_obj,
-            "error": "Please add at least one success criterion."
-        })
+        return templates.TemplateResponse(
+            "create_assignment.html",
+            {
+                "request": request,
+                "form": form,
+                "class_obj": class_obj,
+                "error": "Please add at least one success criterion.",
+            },
+        )
 
     try:
         genre = form.genre
-        if genre == 'custom' and form.custom_genre:
+        if genre == "custom" and form.custom_genre:
             genre = form.custom_genre
 
         assignment = Assignment(
-            title=form.title,
-            curriculum=form.curriculum,
-            genre=genre,
-            class_id=class_id
+            title=form.title, curriculum=form.curriculum, genre=genre, class_id=class_id
         )
         db.add(assignment)
         db.commit()
@@ -3346,8 +3517,7 @@ async def create_assignment(
         for desc in criteria_description:
             if desc.strip():
                 criteria = Criteria(
-                    description=desc.strip(),
-                    assignment_id=assignment.id
+                    description=desc.strip(), assignment_id=assignment.id
                 )
                 db.add(criteria)
         db.commit()
@@ -3357,12 +3527,16 @@ async def create_assignment(
     except Exception as e:
         db.rollback()
         logger.error(f"Error: {str(e)}")
-        return templates.TemplateResponse("create_assignment.html", {
-            "request": request,
-            "form": form,
-            "class_obj": class_obj,
-            "error": "Error creating assignment. Please try again."
-        })
+        return templates.TemplateResponse(
+            "create_assignment.html",
+            {
+                "request": request,
+                "form": form,
+                "class_obj": class_obj,
+                "error": "Error creating assignment. Please try again.",
+            },
+        )
+
 
 # app/routes/assignment_routes.py
 
@@ -3522,18 +3696,35 @@ async def delete_assignment(
 
 
 @app.get("/")
-async def root():
+async def root(request: Request):
+    if is_production(request):
+        redirect_url = "/landing"
+        response = RedirectResponse(url=redirect_url)
+        response.headers["Cache-Control"] = (
+            "no-store, no-cache, must-revalidate, post-check=0, pre-check=0, max-age=0"
+        )
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "-1"
+        return response
+    elif is_local_development(request):
+        redirect_url = "/landing"
+        response = RedirectResponse(url=redirect_url)
+        response.headers["Cache-Control"] = (
+            "no-store, no-cache, must-revalidate, post-check=0, pre-check=0, max-age=0"
+        )
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "-1"
+        return response
+    else:
 
-    redirect_url = "/landing"
-    print(f"Redirecting to: {redirect_url}")
-    response = RedirectResponse(url=redirect_url)
-    response.headers["Cache-Control"] = (
-        "no-store, no-cache, must-revalidate, post-check=0, pre-check=0, max-age=0"
-    )
-    response.headers["Pragma"] = "no-cache"
-    response.headers["Expires"] = "-1"
-
-    return response
+        redirect_url = "/landing"
+        response = RedirectResponse(url=redirect_url)
+        response.headers["Cache-Control"] = (
+            "no-store, no-cache, must-revalidate, post-check=0, pre-check=0, max-age=0"
+        )
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "-1"
+        return response
 
 
 @app.get("/static/attached_assets/{filename:path}", response_class=FileResponse)
@@ -3561,12 +3752,13 @@ async def show_signup(request: Request):
         "signup.html", {"request": request, "form": {}, "error": None}
     )
 
-@app.route('/analyzer')
-def analyzer(request: Request, current_user : User = Depends(get_current_user)):
+
+@app.route("/analyzer")
+def analyzer(request: Request, current_user: User = Depends(get_current_user)):
     if current_user is None:
-        return RedirectResponse(url='/login')
+        return RedirectResponse(url="/login")
     elif current_user in request.session:
-        return RedirectResponse(url = ('add_writing'))
+        return RedirectResponse(url=("add_writing"))
 
 
 @app.get("/terms", response_class=HTMLResponse)
@@ -3607,25 +3799,27 @@ def home(request: Request, current_user=Depends(get_current_user)):
     )
 
 
-@app.get('/mobile-camera')
+@app.get("/mobile-camera")
 def mobile_camera(request: Request):
     """Completely isolated mobile camera implementation."""
-    student_id = request.args.get('student_id', '')
-    assignment_id = request.args.get('assignment_id', '')
+    student_id = request.args.get("student_id", "")
+    assignment_id = request.args.get("assignment_id", "")
     # This template is self-contained with no shared JavaScript or templates
-    return templates.TemplateResponse('mobile_camera.html', 
-                          student_id=student_id,
-                          assignment_id=assignment_id)
+    return templates.TemplateResponse(
+        "mobile_camera.html", student_id=student_id, assignment_id=assignment_id
+    )
 
 
-app.get('/single-camera')
+app.get("/single-camera")
+
+
 def single_camera(request: Request):
     """Absolutely standalone camera with no dependencies or inherited templates."""
-    student_id = request.args.get('student_id', '')
-    assignment_id = request.args.get('assignment_id', '')
-    return templates.TemplateResponse('single_camera.html', 
-                          student_id=student_id,
-                          assignment_id=assignment_id)
+    student_id = request.args.get("student_id", "")
+    assignment_id = request.args.get("assignment_id", "")
+    return templates.TemplateResponse(
+        "single_camera.html", student_id=student_id, assignment_id=assignment_id
+    )
 
 
 def find_index(list_obj, value):
@@ -3634,9 +3828,11 @@ def find_index(list_obj, value):
     except ValueError:
         return 0
 
+
 # Register it with Jinja environment
 templates.env.filters["index"] = find_index
 templates.env.filters["find_index"] = find_index
+
 
 def calculate_mean(lst):
     """Calculate mean of a list of numbers."""
@@ -3645,11 +3841,12 @@ def calculate_mean(lst):
     except (TypeError, ZeroDivisionError):
         return 0
 
+
 def nl2br(value):
     """Convert newlines to <br> tags."""
     if not value:
-        return ''
-    return Markup(value.replace('\n', '<br>'))
+        return ""
+    return Markup(value.replace("\n", "<br>"))
 
 
 templates.env.filters["mean"] = calculate_mean
