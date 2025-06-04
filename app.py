@@ -181,7 +181,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost",
         "http://127.0.0.1",
-        "http://0.0.0.0",
+        "http://0.0.0.0:5000",
         "https://js-projects-scribl.wjhk3s.easypanel.host",
         "https://scribl-v1.onrender.com"
     ],
