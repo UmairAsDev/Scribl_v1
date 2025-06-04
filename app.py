@@ -92,10 +92,11 @@ templates.env.filters["nl2br"] = nl2br
 
 
 allowed_hosts = [
-    "0.0.0.0:5000",
+    "http://0.0.0.0:5000",
     "localhost",
     "127.0.0.1",
     "js-projects-scribl.wjhk3s.easypanel.host",
+    "https://scribl-v1.onrender.com"
 ]
 
 # Use one HTTPS redirect middleware
@@ -126,7 +127,7 @@ def is_local_development(request: Request = None):
 
 
 def is_production(request: Request = None):
-    production_hosts = ["js-projects-scribl.wjhk3s.easypanel.host"]
+    production_hosts = ["js-projects-scribl.wjhk3s.easypanel.host", "https://scribl-v1.onrender.com"]
     if request:
         host = request.headers.get("host", "").split(":")[0]
         return host in production_hosts
@@ -182,6 +183,7 @@ app.add_middleware(
         "http://127.0.0.1",
         "http://0.0.0.0",
         "https://js-projects-scribl.wjhk3s.easypanel.host",
+        "https://scribl-v1.onrender.com"
     ],
     allow_credentials=True,
     allow_methods=["*"],
