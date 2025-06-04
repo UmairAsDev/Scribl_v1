@@ -92,7 +92,7 @@ templates.env.filters["nl2br"] = nl2br
 
 
 allowed_hosts = [
-    "0.0.0.0",
+    "0.0.0.0:5000",
     "localhost",
     "127.0.0.1",
     "js-projects-scribl.wjhk3s.easypanel.host",
