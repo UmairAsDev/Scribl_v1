@@ -74,6 +74,7 @@ from io import StringIO, BytesIO
 import csv
 import os
 import json
+import secrets
 import pandas as pd
 
 
@@ -89,38 +90,47 @@ templates = Jinja2Templates(directory="templates")
 templates.env.filters["nl2br"] = nl2br
 
 
-# origins = [
-#     "http://0.0.0.0:5000",  
-#     "https://js-projects-scribl.wjhk3s.easypanel.host",
-# ]
+
+allowed_hosts=[
+    "0.0.0.0",
+    "localhost",
+    "127.0.0.1",
+    "js-projects-scribl.wjhk3s.easypanel.host"
+]  
 
 
 
-middleware = [
-    
-    Middleware(TrustedHostMiddleware, allowed_hosts=[
-        "0.0.0.0",
-        "localhost",
-        "127.0.0.1",
-        "js-projects-scribl.wjhk3s.easypanel.host"
-    ]),
-    Middleware(SessionMiddleware, secret_key=env_settings.SESSION_SECRET),
-]
 
 def is_local_development(request: Request = None):
     if request:
         host = request.headers.get("host")
-        return host in ["localhost:8000", "127.0.0.1:8000", "0.0.0.0:8000", "localhost", "127.0.0.1", "0.0.0.0"]
+        return host in allowed_hosts
    
     return os.environ.get("ENVIRONMENT") != "production" 
 
+
+
+
+middleware = [
+    Middleware(TrustedHostMiddleware, allowed_hosts=[
+        "0.0.0.0",
+        "localhost",
+        "127.0.0.1",
+        "js-projects-scribl.wjhk3s.easypanel.host",
+        # Add your production domain
+        "yourdomain.com"
+    ]),
+    Middleware(SessionMiddleware,
+                secret_key=env_settings.SESSION_SECRET,
+                session_cookie="sessionid",
+                # domain=not is_local_development(),
+                same_site="lax",
+                https_only=False,
+                max_age=3600) 
+    ]
+
 if not is_local_development():
     middleware.append(Middleware(HTTPSRedirectMiddleware))
-
-
-
-app = FastAPI(middleware=middleware)
-
 
 app = FastAPI(middleware=middleware)
 
@@ -144,6 +154,30 @@ class NoCacheStaticMiddleware(BaseHTTPMiddleware):
 app.add_middleware(NoCacheStaticMiddleware)
 
 
+
+
+async def get_csrf_token(request: Request) -> str:
+    if "csrf_token" not in request.session:
+        request.session["csrf_token"] = secrets.token_urlsafe(32)
+    return request.session["csrf_token"]
+
+async def validate_csrf_token(request: Request, token: str):
+    session_token = request.session.get("csrf_token")
+    if not session_token:
+        raise HTTPException(status_code=403, detail="Missing CSRF token in session")
+    
+    if len(token) != len(session_token):
+        raise HTTPException(status_code=403, detail="Invalid CSRF token length")
+    
+    if not secrets.compare_digest(token, session_token):
+        raise HTTPException(status_code=403, detail="CSRF tokens do not match")
+    
+    # Regenerate token after validation for extra security
+    request.session["csrf_token"] = secrets.token_urlsafe(32)
+    
+    
+    
+    
 # Static files with no-cache headers
 @app.get("/static/{filename:path}", name="static")
 async def static_files(filename: str):
@@ -339,58 +373,61 @@ async def process_image(request: Request, db: Session = Depends(get_db), current
 
 
 
+@app.get("/login")
+async def login_form(request: Request):
+    csrf_token = await get_csrf_token(request)
+    response = templates.TemplateResponse(
+        "login.html",
+        {"request": request, "csrf_token": csrf_token}
+    )
+    print(f"GET - Setting cookie. Session: {request.session}")
+    return response
+
+
 @app.post("/login", response_class=HTMLResponse)
 async def login(
     request: Request,
     email: str = Form(...),
     password: str = Form(...),
+    csrf_token: str = Form(...),
     db: Session = Depends(get_db),
 ):
+    # Validate CSRF token first
+    print(f"POST - Session ID: {request.session.get('id')}")
+    print(f"POST - Stored CSRF: {request.session.get('csrf_token')}")
+    print(f"POST - Submitted CSRF: {csrf_token}")
+    print(f"POST - Received cookies: {request.cookies}")
+    await validate_csrf_token(request, csrf_token)
+    
     email = email.lower()
-    form = LoginForm(email=email, password=password)
-    print(f"Login form data: {form}")
+    user = db.query(User).filter_by(email=email).first()
 
     try:
-
-        user = db.query(User).filter_by(email=email).first()
-        request.session["user_id"] = user.id if user else None
-        print(f"User found: {user}")
-        logger.info(f"Login attempt for email... {email}")
-        if user is not None:
-            request.session["flash"]= ("login successful..")
-            return RedirectResponse(url="/home", status_code=HTTP_302_FOUND)
-
         if not user:
             logger.warning(f"Failed login attempt for user: {email}")
-            return templates.TemplateResponse(
-                "login.html", {"request": request, "error": "Invalid email or password"}
-            )
+            return RedirectResponse(url="/login?error=Invalid+email+or+password", status_code=HTTP_302_FOUND)
 
-        if user.check_password(password):
-            print(f"User found: {user}")
-            user.last_login = datetime.now()
-            db.commit()
-
-            # Store the user ID in the session
-            request.session["user_id"] = user.id
-            print(f"User ID set in session: {request.session['user_id']}")
-            logger.info(f"Successful login for user: {email}")
-            return RedirectResponse(url="landing", status_code=HTTP_302_FOUND)
-        else:
+        if not user.check_password(password):
             logger.warning(f"Failed login attempt for user: {email}")
-            return templates.TemplateResponse(
-                "login.html", {"request": request, "error": "Invalid email or password"}
-            )
+            return RedirectResponse(url="/login?error=Invalid+email+or+password", status_code=HTTP_302_FOUND)
+
+        # Successful login
+        db.commit()
+
+        request.session["user_id"] = user.id
+        request.session["_fresh"] = True  # Mark session as fresh
+        logger.info(f"Successful login for user: {email}")
+        
+        return RedirectResponse(url="/home", status_code=HTTP_302_FOUND)
+
     except Exception as e:
         logger.error(f"Error during login: {e}")
-        return templates.TemplateResponse(
-            "login.html",
-            {
-                "request": request,
-                "form": form,
-                "error": "An error occurred during login",
-            },
+        return RedirectResponse(
+            url="/login?error=An+error+occurred+during+login",
+            status_code=HTTP_302_FOUND
         )
+
+
 
 
 @app.post("/signup", response_class=HTMLResponse)
