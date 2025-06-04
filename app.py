@@ -76,6 +76,7 @@ import os
 import json
 import secrets
 import pandas as pd
+from fastapi.middleware.cors import CORSMiddleware
 
 
 
@@ -85,75 +86,114 @@ def nl2br(value: str):
     return Markup("<br>".join(escape(value).splitlines()))
 
 
+
+
 logger = logging.getLogger(__name__)
+
+
 templates = Jinja2Templates(directory="templates")
-templates.env.filters["nl2br"] = nl2br
+templates.env.filters["nl2br"] = nl2br 
 
 
-
-allowed_hosts=[
+allowed_hosts = [
     "0.0.0.0",
     "localhost",
     "127.0.0.1",
     "js-projects-scribl.wjhk3s.easypanel.host"
-]  
+]
 
 
+class PermanentHTTPSRedirectMiddleware(HTTPSRedirectMiddleware):
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            headers = dict(scope["headers"])
+            host = headers.get(b"host", b"").decode("latin-1")
+            if not host.startswith(("localhost", "127.0.0.1")):
+                scheme = scope.get("scheme", "http")
+                if scheme != "https":
+                    url = f"https://{host}{scope['path']}"
+                    if scope["query_string"]:
+                        url += f"?{scope['query_string'].decode()}"
+                    response = RedirectResponse(url, status_code=301)  
+                    await response(scope, receive, send)
+                    return
+        await self.app(scope, receive, send)
 
 
 def is_local_development(request: Request = None):
+    local_hosts = ["localhost", "127.0.0.1", "0.0.0.0"]
     if request:
-        host = request.headers.get("host")
-        return host in allowed_hosts
-   
-    return os.environ.get("ENVIRONMENT") != "production" 
+        host = request.headers.get("host", "").split(":")[0]
+        return host in local_hosts
+    return os.environ.get("ENVIRONMENT", "development") != "production"
 
+def is_production(request: Request = None):
+    production_hosts = ["js-projects-scribl.wjhk3s.easypanel.host"]
+    if request:
+        host = request.headers.get("host", "").split(":")[0]  
+        return host in production_hosts
+    return False
 
+templates.env.globals.update(is_production=is_production)
 
 
 middleware = [
-    Middleware(TrustedHostMiddleware, allowed_hosts=[
-        "0.0.0.0",
-        "localhost",
-        "127.0.0.1",
-        "js-projects-scribl.wjhk3s.easypanel.host",
-        # Add your production domain
-        "yourdomain.com"
-    ]),
+    Middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts),
     Middleware(SessionMiddleware,
-                secret_key=env_settings.SESSION_SECRET,
-                session_cookie="sessionid",
-                # domain=not is_local_development(),
-                same_site="lax",
-                https_only=False,
-                max_age=3600) 
-    ]
+        secret_key=env_settings.SESSION_SECRET,
+        session_cookie="sessionid",
+        same_site="lax",
+        https_only=not is_local_development(),
+        max_age=3600*24
+    )
+]
 
-if not is_local_development():
-    middleware.append(Middleware(HTTPSRedirectMiddleware))
 
 app = FastAPI(middleware=middleware)
 
-app.mount("/static", StaticFiles(directory="static"), name="static")
+
+if not is_local_development():
+    app.add_middleware(PermanentHTTPSRedirectMiddleware)
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    if not is_local_development(request):
+        response.headers.update({
+            "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+            "Content-Security-Policy": "upgrade-insecure-requests",
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "DENY"
+        })
+    return response
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost",
+        "http://127.0.0.1",
+        "http://0.0.0.0",
+        "https://js-projects-scribl.wjhk3s.easypanel.host"
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 class NoCacheStaticMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         response = await call_next(request)
-
         if request.url.path.startswith("/static/"):
-            response.headers["Cache-Control"] = (
-                "no-store, no-cache, must-revalidate, post-check=0, pre-check=0, max-age=0"
-            )
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
             response.headers["Pragma"] = "no-cache"
-            response.headers["Expires"] = "-1"
-
+            response.headers["Expires"] = "0"
         return response
 
-
+app.mount("/static", StaticFiles(directory="static"), name="static")
 app.add_middleware(NoCacheStaticMiddleware)
-
-
 
 
 async def get_csrf_token(request: Request) -> str:
@@ -172,10 +212,8 @@ async def validate_csrf_token(request: Request, token: str):
     if not secrets.compare_digest(token, session_token):
         raise HTTPException(status_code=403, detail="CSRF tokens do not match")
     
-    # Regenerate token after validation for extra security
+
     request.session["csrf_token"] = secrets.token_urlsafe(32)
-    
-    
     
     
 # Static files with no-cache headers
@@ -374,14 +412,19 @@ async def process_image(request: Request, db: Session = Depends(get_db), current
 
 
 @app.get("/login")
-async def login_form(request: Request):
+async def show_login_form(request: Request):
     csrf_token = await get_csrf_token(request)
     response = templates.TemplateResponse(
         "login.html",
         {"request": request, "csrf_token": csrf_token}
     )
-    print(f"GET - Setting cookie. Session: {request.session}")
+    # Explicitly set cookie headers
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
     return response
+
+
 
 
 @app.post("/login", response_class=HTMLResponse)
@@ -393,10 +436,6 @@ async def login(
     db: Session = Depends(get_db),
 ):
     # Validate CSRF token first
-    print(f"POST - Session ID: {request.session.get('id')}")
-    print(f"POST - Stored CSRF: {request.session.get('csrf_token')}")
-    print(f"POST - Submitted CSRF: {csrf_token}")
-    print(f"POST - Received cookies: {request.cookies}")
     await validate_csrf_token(request, csrf_token)
     
     email = email.lower()
@@ -523,10 +562,8 @@ async def signup(
 
 @app.get("/logout", name="logout")
 async def logout(request: Request, response: Response):
-    print(f"Before logout, user_id in session: {request.session.get('user_id')}")
     request.session.pop("user_id", None)
     response.delete_cookie("session")
-    print(f"After logout, user_id in session: {request.session.get('user_id')}")
     return RedirectResponse(url="/login", status_code=HTTP_302_FOUND)
 
 
