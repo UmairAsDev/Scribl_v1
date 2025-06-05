@@ -14,7 +14,7 @@ Base = declarative_base()
 
 engine = create_engine(env_settings.DATABASE_URL,
     pool_pre_ping=True,
-    pool_recycle=280,
+    pool_recycle=1800,
     pool_size=10,
     max_overflow=15,
     pool_timeout=30
