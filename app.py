@@ -90,14 +90,13 @@ templates = Jinja2Templates(directory="templates")
 templates.env.filters["nl2br"] = nl2br
 
 
-
 allowed_hosts = [
     "0.0.0.0",
     "localhost",
     "127.0.0.1",
     "js-projects-scribl.wjhk3s.easypanel.host",
     "scribl-v1.onrender.com",
-    "*.onrender.com",  
+    "*.onrender.com",
 ]
 
 
@@ -119,7 +118,6 @@ class PermanentHTTPSRedirectMiddleware(HTTPSRedirectMiddleware):
         await self.app(scope, receive, send)
 
 
-
 def is_local_development(request: Request = None):
     local_hosts = ["localhost", "127.0.0.1", "0.0.0.0"]
     if request:
@@ -131,7 +129,7 @@ def is_local_development(request: Request = None):
 def is_production(request: Request = None):
     production_hosts = [
         "js-projects-scribl.wjhk3s.easypanel.host",
-        "scribl-v1.onrender.com"
+        "scribl-v1.onrender.com",
     ]
     if request:
         host = request.headers.get("host", "").split(":")[0]
@@ -162,7 +160,6 @@ middleware = [
 ]
 
 
-
 app = FastAPI(middleware=middleware)
 
 if not is_local_development():
@@ -174,11 +171,13 @@ async def security_headers(request: Request, call_next):
     response = await call_next(request)
 
     if is_production(request):
-        response.headers.update({
-            "Content-Security-Policy": "upgrade-insecure-requests",
-            "X-Content-Type-Options": "nosniff",
-            "X-Frame-Options": "DENY",
-        })
+        response.headers.update(
+            {
+                "Content-Security-Policy": "upgrade-insecure-requests",
+                "X-Content-Type-Options": "nosniff",
+                "X-Frame-Options": "DENY",
+            }
+        )
 
         if request.url.scheme == "https":
             response.headers["Strict-Transport-Security"] = (
@@ -186,8 +185,6 @@ async def security_headers(request: Request, call_next):
             )
 
     return response
-
-
 
 
 class NoCacheStaticMiddleware(BaseHTTPMiddleware):
@@ -202,6 +199,7 @@ class NoCacheStaticMiddleware(BaseHTTPMiddleware):
                 }
             )
         return response
+
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 app.add_middleware(NoCacheStaticMiddleware)
@@ -225,8 +223,6 @@ async def validate_csrf_token(request: Request, token: str):
         raise HTTPException(status_code=403, detail="CSRF tokens do not match")
 
     request.session["csrf_token"] = secrets.token_urlsafe(32)
-
-
 
 
 # Static files with no-cache headers
@@ -559,7 +555,7 @@ async def signup(
         created_at=datetime.now(),
     )
     user.set_password(form.password)
-    print(f"User created: {user}")
+   
     try:
         db.add(user)
         db.commit()
@@ -2055,7 +2051,6 @@ async def process_images_ocr(
 
             response_data = json.loads(criteria_response.choices[0].message.content)
             evaluations = response_data.get("evaluations", [])
-            print(f"Evaluations: {evaluations}")
             db.query(CriteriaMark).filter_by(writing_id=writing_sample.id).delete()
             for criterion, evaluation in zip(assignment.criteria, evaluations):
                 score = min(2, max(0, int(evaluation.get("score", 0))))
@@ -2420,926 +2415,46 @@ def get_wagoll_examples(
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 
-@app.get('/wagoll_example/{example_id}')
-def get_wagoll_example(example_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+@app.get("/wagoll_example/{example_id}")
+def get_wagoll_example(
+    example_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """Get a specific WAGOLL example."""
     from models import WagollExample
 
     example = db.query(WagollExample).get(example_id)
     if example is None:
-        return JSONResponse(status_code=404, content={'error': 'Example not found'})
+        return JSONResponse(status_code=404, content={"error": "Example not found"})
 
     if example.teacher_id != current_user.id and not example.is_public:
-        return JSONResponse(status_code=403, content={'error': 'Unauthorized'})
+        return JSONResponse(status_code=403, content={"error": "Unauthorized"})
 
     try:
         response = {
-            'id': example.id,
-            'title': example.title,
-            'content': example.content,
-            'explanations': example.explanations,
-            'is_public': example.is_public,
-            'assignment_id': example.assignment_id,
-            'assignment_title': example.assignment.title if example.assignment else None,
-            'created_at': example.created_at.isoformat() if example.created_at else None,
-            'updated_at': example.updated_at.isoformat() if example.updated_at else None
+            "id": example.id,
+            "title": example.title,
+            "content": example.content,
+            "explanations": example.explanations,
+            "is_public": example.is_public,
+            "assignment_id": example.assignment_id,
+            "assignment_title": (
+                example.assignment.title if example.assignment else None
+            ),
+            "created_at": (
+                example.created_at.isoformat() if example.created_at else None
+            ),
+            "updated_at": (
+                example.updated_at.isoformat() if example.updated_at else None
+            ),
         }
 
         return JSONResponse(content=response)
 
     except Exception as e:
         logger.error(f"Error getting WAGOLL example: {str(e)}")
-        return JSONResponse(status_code=500, content={'error': str(e)})
-
-
-
-@app.get("/assignment/{assignment_id}/class-feedback")
-def get_class_feedback(
-    assignment_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    assignment = db.query(Assignment).get(assignment_id)
-    if not assignment or assignment.class_group.teacher_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Unauthorized")
-
-    try:
-        submissions = db.query(Writing).filter_by(assignment_id=assignment_id).all()
-
-        if not submissions:
-            return JSONResponse(
-                content={
-                    "strengths": ["No submissions to analyze"],
-                    "areas_for_development": ["No submissions to analyze"],
-                    "practice_activities": ["No submissions to analyze"],
-                }
-            )
-
-        max_submissions = min(len(submissions), 10)
-        submissions = submissions[:max_submissions]
-
-        criteria_scores = {}
-        common_strengths = []
-        common_weaknesses = []
-        avg_writing_age = 0
-        writing_age_count = 0
-
-        for submission in submissions:
-            if submission.writing_age:
-                try:
-                    years = float(submission.writing_age.split(" years")[0])
-                    avg_writing_age += years
-                    writing_age_count += 1
-                except (ValueError, IndexError):
-                    continue
-
-            if submission.feedback:
-                parts = submission.feedback.split("\n\n")
-                if len(parts) >= 1:
-                    for line in parts[0].replace("Strengths:", "").split("\n"):
-                        if line.strip().startswith("- "):
-                            common_strengths.append(line.strip()[2:])
-                if len(parts) >= 2:
-                    for line in (
-                        parts[1].replace("Areas for Development:", "").split("\n")
-                    ):
-                        if line.strip().startswith("- "):
-                            common_weaknesses.append(line.strip()[2:])
-
-            for mark in submission.criteria_marks:
-                key = mark.criteria.description
-                if key not in criteria_scores:
-                    criteria_scores[key] = {"total": mark.score, "count": 1}
-                else:
-                    criteria_scores[key]["total"] += mark.score
-                    criteria_scores[key]["count"] += 1
-
-        if writing_age_count:
-            avg_writing_age /= writing_age_count
-
-        avg_criteria = [
-            {"criterion": k, "avg_score": v["total"] / v["count"]}
-            for k, v in criteria_scores.items()
-        ]
-        avg_criteria.sort(key=lambda x: x["avg_score"])
-
-        analysis_prompt = f"""Analyze this class's writing submissions for a specific assignment and provide exactly:
-
-        1. Three clear class strengths
-        2. Three specific areas for development
-        3. Four practical practice activities
-
-        Format your response as a JSON object with exactly these keys:
-        {{
-            "strengths": [3 strength items],
-            "areas_for_development": [3 development items],
-            "practice_activities": [4 activity items]
-        }}
-
-        Assignment Details:
-        Title: {assignment.title}
-        Genre: {assignment.genre}
-        Curriculum: {assignment.curriculum}
-        Number of Submissions Analyzed: {max_submissions} (out of {len(submissions)})
-        Average Writing Age: {avg_writing_age:.1f} years"""
-
-        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        MODEL_NAME = "gpt-4o"
-
-        response = client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[
-                {"role": "system", "content": analysis_prompt},
-                {
-                    "role": "user",
-                    "content": json.dumps(
-                        {
-                            "highest_scoring_criteria": [
-                                c for c in avg_criteria[-3:] if c["avg_score"] > 1
-                            ],
-                            "lowest_scoring_criteria": [
-                                c for c in avg_criteria[:3] if c["avg_score"] < 1
-                            ],
-                            "common_strengths": common_strengths[:10],
-                            "common_weaknesses": common_weaknesses[:10],
-                            "avg_writing_age": avg_writing_age,
-                        }
-                    ),
-                },
-            ],
-            response_format={"type": "json_object"},
-        )
-
-        analysis = json.loads(response.choices[0].message.content)
-        return JSONResponse(
-            content={
-                "strengths": analysis.get("strengths", ["No strengths identified"]),
-                "areas_for_development": analysis.get(
-                    "areas_for_development", ["No areas identified"]
-                ),
-                "practice_activities": analysis.get(
-                    "practice_activities", ["No activities suggested"]
-                ),
-            }
-        )
-
-    except Exception as e:
-        logger.error(f"Error generating class feedback: {str(e)}")
-        return JSONResponse(
-            status_code=500,
-            content={
-                "strengths": ["Error analyzing submissions"],
-                "areas_fordevelopment": ["Error analyzing submissions"],
-                "practice_activities": ["Error analyzing submissions"],
-            },
-        )
-
-
-@app.get("/data_analysis", response_class=HTMLResponse)
-async def data_analysis(
-    request: Request,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    user_classes = db.query(Class).filter_by(teacher_id=current_user.id).all()
-    now = datetime.now()
-
-    return templates.TemplateResponse(
-        "data_analysis.html", {"request": request, "classes": user_classes, "now": now}
-    )
-
-
-@app.get("/api/students")
-async def get_api_students(
-    class_id: str = Query("all"),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    if class_id == "all":
-        students = (
-            db.query(Student)
-            .join(Class)
-            .filter(Class.teacher_id == current_user.id)
-            .order_by(Student.first_name, Student.last_name)
-            .all()
-        )
-    else:
-        students = (
-            db.query(Student)
-            .join(Class)
-            .filter(Class.id == class_id, Class.teacher_id == current_user.id)
-            .order_by(Student.first_name, Student.last_name)
-            .all()
-        )
-
-    return JSONResponse(
-        {
-            "students": [
-                {
-                    "id": student.id,
-                    "name": f"{student.first_name} {student.last_name}",
-                    "class_id": student.class_id,
-                }
-                for student in students
-            ]
-        }
-    )
-
-
-@app.get("/api/student_data")
-async def get_api_student_data(
-    ids: Optional[str] = Query(default=""),
-    class_id: Optional[str] = Query(default="all"),
-    time_period: Optional[str] = Query(default="all"),
-    chart_type: Optional[str] = Query(default="writing_scores"),
-    include_average: Optional[bool] = Query(default=False),
-    average_type: Optional[str] = Query(default="all"),
-    db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
-):
-    student_id_list = [int(sid) for sid in ids.split(",") if sid.isdigit()]
-    time_filter = None
-
-    if time_period != "all":
-        now = datetime.now()
-        days_map = {"month": 30, "quarter": 90, "year": 365}
-        if time_period in days_map:
-            time_filter = now - timedelta(days=days_map[time_period])
-
-    datasets = []
-    all_dates = set()
-
-    for student_id in student_id_list:
-        student = (
-            db.query(Student)
-            .join(Class)
-            .filter(Student.id == student_id, Class.teacher_id == current_user.id)
-            .first()
-        )
-        if not student:
-            continue
-
-        query = db.query(Writing).filter(Writing.student_id == student_id)
-        if time_filter:
-            query = query.filter(Writing.created_at >= time_filter)
-        samples = query.order_by(Writing.created_at).all()
-
-        data_points = []
-        for sample in samples:
-            value = None
-            if chart_type == "writing_scores" and sample.criteria_marks:
-                total = len(sample.criteria_marks)
-                met = sum(1 for m in sample.criteria_marks if m.score == 2)
-                partial = sum(1 for m in sample.criteria_marks if m.score == 1)
-                value = (met / total) * 100 + (partial / total) * 50
-            elif chart_type == "writing_age" and sample.writing_age:
-                try:
-                    value = float(sample.writing_age.split()[0])
-                except:
-                    continue
-            elif chart_type == "age_difference" and sample.writing_age:
-                try:
-                    writing_age = float(sample.writing_age.split()[0])
-                    actual_age = (
-                        sample.created_at.date() - student.date_of_birth
-                    ).days / 365.25
-                    value = writing_age - actual_age
-                except:
-                    continue
-            else:
-                continue
-
-            date_str = f"{sample.created_at.strftime('%Y-%m-%d')} ({sample.id})"
-            date_display = sample.created_at.strftime("%d %b %Y")
-            all_dates.add(date_str)
-            data_points.append(
-                {
-                    "date": date_str,
-                    "date_display": date_display,
-                    "value": value,
-                    "writing_id": sample.id,
-                }
-            )
-
-        if data_points:
-            sorted_points = sorted(data_points, key=lambda x: x["date"])
-            datasets.append(
-                {
-                    "student_id": student.id,
-                    "name": f"{student.first_name} {student.last_name}",
-                    "data": [p["value"] for p in sorted_points],
-                    "dates": [p["date"] for p in sorted_points],
-                    "is_average": False,
-                }
-            )
-
-    # Average dataset for class
-    if include_average and class_id != "all" and class_id.isdigit():
-        class_obj = (
-            db.query(Class)
-            .filter_by(id=int(class_id), teacher_id=current_user.id)
-            .first()
-        )
-        if class_obj:
-            student_ids = [
-                s.id for s in db.query(Student).filter_by(class_id=class_obj.id).all()
-            ]
-            all_dates_list = sorted(all_dates)
-            avg_data = []
-
-            for date_str in all_dates_list:
-                if " (" in date_str:
-                    date_part = date_str.split(" (")[0]
-                    date_obj = datetime.strptime(date_part, "%Y-%m-%d").date()
-                    next_day = date_obj + timedelta(days=1)
-                    writings = (
-                        db.query(Writing)
-                        .filter(
-                            Writing.student_id.in_(student_ids),
-                            Writing.created_at >= date_obj,
-                            Writing.created_at < next_day,
-                        )
-                        .all()
-                    )
-
-                    values = []
-                    for w in writings:
-                        if chart_type == "writing_scores" and w.criteria_marks:
-                            total = len(w.criteria_marks)
-                            achieved = sum(m.score for m in w.criteria_marks)
-                            if total:
-                                values.append((achieved / (total * 2)) * 100)
-                        elif chart_type == "writing_age" and w.writing_age:
-                            try:
-                                values.append(float(w.writing_age.split()[0]))
-                            except:
-                                pass
-                        elif chart_type == "age_difference" and w.writing_age:
-                            try:
-                                writing_age = float(w.writing_age.split()[0])
-                                actual_age = (
-                                    w.created_at.date() - student.date_of_birth
-                                ).days / 365.25
-                                values.append(writing_age - actual_age)
-                            except:
-                                pass
-                    avg_data.append(sum(values) / len(values) if values else None)
-
-            if any(avg_data):
-                datasets.append(
-                    {
-                        "student_id": "average",
-                        "name": f"{class_obj.name} Class Average",
-                        "data": avg_data,
-                        "dates": all_dates_list,
-                        "is_average": True,
-                    }
-                )
-
-    # Format date display map
-    date_display_map = {}
-    for ds in datasets:
-        for date_key in ds.get("dates", []):
-            if " (" in date_key:
-                date_part = date_key.split(" (")[0]
-                try:
-                    date_obj = datetime.strptime(date_part, "%Y-%m-%d")
-                    display = date_obj.strftime("%d %b %Y")
-                    date_display_map[date_key] = display
-                except:
-                    date_display_map[date_key] = date_key
-
-    insights = {}
-    if datasets:
-        insights = {
-            "key_observations": [
-                "Select multiple students to compare their progress over time.",
-                "Use the chart filters to explore different metrics and time periods.",
-            ],
-            "recommendations": "Focus on students showing significant differences from the class average.",
-        }
-
-    return JSONResponse(
-        {
-            "labels": sorted(all_dates),
-            "date_displays": date_display_map,
-            "datasets": datasets,
-            "insights": insights,
-        }
-    )
-
-
-@app.get("/student/{student_id}/portfolio", name="student_portfolio")
-async def student_portfolio(
-    student_id: int,
-    request: Request,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    try:
-        student = db.query(Student).filter(Student.id == student_id).first()
-
-        if not student:
-            raise HTTPException(status_code=404, detail="Student not found")
-
-        # Permission check
-        if student.class_group.teacher_id != current_user.id:
-            request.session["flash"] = {
-                "message": "You do not have permission to view this portfolio.",
-                "category": "danger",
-            }
-            return RedirectResponse(url="/", status_code=303)
-
-        from sqlalchemy.orm import joinedload
-
-        writing_samples = (
-            db.query(Writing)
-            .options(joinedload(Writing.criteria_marks), joinedload(Writing.assignment))
-            .filter(Writing.student_id == student_id)
-            .order_by(Writing.created_at.desc())
-            .all()
-        )
-
-        assignments = (
-            db.query(Assignment).filter(Assignment.class_id == student.class_id).all()
-        )
-
-        # Average criteria met
-        total_criteria_scores = 0
-        total_criteria_count = 0
-        for sample in writing_samples:
-            if sample.criteria_marks:
-                total_criteria_count += len(sample.criteria_marks)
-                total_criteria_scores += sum(
-                    mark.score for mark in sample.criteria_marks
-                )
-
-        average_criteria_met = (
-            (total_criteria_scores / (total_criteria_count * 2)) * 100
-            if total_criteria_count > 0
-            else None
-        )
-
-        # Progress rating calculation
-        age_differences = []
-        for sample in writing_samples:
-            if sample.writing_age:
-                try:
-                    writing_age_value = float(sample.writing_age.split()[0])
-                    today = datetime.now().date()
-                    birth_date = student.date_of_birth
-                    student_age = (today - birth_date).days / 365.25
-                    age_diff = round(writing_age_value - student_age, 1)
-
-                    age_differences.append(
-                        {
-                            "sample_id": sample.id,
-                            "date": sample.created_at,
-                            "filename": sample.filename,
-                            "writing_age": writing_age_value,
-                            "student_age": student_age,
-                            "difference": age_diff,
-                            "assignment": (
-                                sample.assignment.title
-                                if sample.assignment
-                                else "No Assignment"
-                            ),
-                        }
-                    )
-                except (ValueError, AttributeError, IndexError):
-                    continue
-
-        progress_rating = None
-        if age_differences:
-            age_differences.sort(key=lambda x: x["date"], reverse=True)
-            latest = age_differences[: min(3, len(age_differences))]
-            avg_diff = sum(item["difference"] for item in latest) / len(latest)
-            if avg_diff >= 3:
-                progress_rating = "Excellent"
-            elif avg_diff >= 2:
-                progress_rating = "Very Good"
-            elif avg_diff >= 1:
-                progress_rating = "Good"
-            elif avg_diff >= 0:
-                progress_rating = "Satisfactory"
-            else:
-                progress_rating = "Needs Support"
-
-        # Chart data prep
-        chart_data = {
-            "labels": [],
-            "datasets": [
-                {
-                    "label": "Assignment Score",
-                    "data": [],
-                    "backgroundColor": "rgba(75, 192, 192, 0.2)",
-                    "borderColor": "rgba(75, 192, 192, 1)",
-                    "borderWidth": 2,
-                    "pointRadius": 5,
-                    "pointBackgroundColor": "rgba(75, 192, 192, 1)",
-                    "fill": True,
-                }
-            ],
-        }
-
-        age_chart_data = {
-            "labels": [],
-            "datasets": [
-                {
-                    "label": "Writing Age",
-                    "data": [],
-                    "borderColor": "rgba(54, 162, 235, 1)",
-                    "backgroundColor": "rgba(54, 162, 235, 0.2)",
-                    "borderWidth": 2,
-                    "pointRadius": 5,
-                    "fill": False,
-                },
-                {
-                    "label": "Actual Age",
-                    "data": [],
-                    "borderColor": "rgba(255, 99, 132, 1)",
-                    "backgroundColor": "rgba(255, 99, 132, 0.2)",
-                    "borderWidth": 2,
-                    "pointRadius": 5,
-                    "fill": False,
-                },
-            ],
-        }
-
-        for sample in reversed(writing_samples):
-            chart_data["labels"].append(sample.created_at.strftime("%d %b %Y"))
-            if sample.criteria_marks:
-                total_marks = len(sample.criteria_marks)
-                score = sum(mark.score for mark in sample.criteria_marks)
-                chart_data["datasets"][0]["data"].append(
-                    (score / (total_marks * 2)) * 100
-                )
-            else:
-                chart_data["datasets"][0]["data"].append(0)
-
-            if sample.writing_age:
-                try:
-                    writing_age_val = float(sample.writing_age.split()[0])
-                    today = datetime.now().date()
-                    birth_date = student.date_of_birth
-                    student_age = (today - birth_date).days / 365.25
-                    age_chart_data["labels"].append(
-                        sample.created_at.strftime("%d %b %Y")
-                    )
-                    age_chart_data["datasets"][0]["data"].append(writing_age_val)
-                    age_chart_data["datasets"][1]["data"].append(student_age)
-                except Exception:
-                    continue
-
-        # Prev/next student navigation
-        class_students = (
-            db.query(Student)
-            .filter(Student.class_id == student.class_id)
-            .order_by(Student.first_name)
-            .all()
-        )
-        current_index = next(
-            (i for i, s in enumerate(class_students) if s.id == student.id), None
-        )
-
-        prev_student = (
-            class_students[current_index - 1]
-            if current_index and current_index > 0
-            else class_students[-1]
-        )
-        next_student = (
-            class_students[(current_index + 1) % len(class_students)]
-            if current_index is not None
-            else None
-        )
- 
-        return templates.TemplateResponse(
-            "student_portfolio_new_temp.html",
-            context={
-                "request": request,
-                "student": student,
-                "writing_samples": writing_samples,
-                "assignments": assignments,
-                "average_criteria_met": average_criteria_met,
-                "progress_rating": progress_rating,
-                "prev_student": prev_student,
-                "next_student": next_student,
-                "chart_data": json.dumps(chart_data),
-                "age_chart_data": json.dumps(age_chart_data),
-                "age_differences": age_differences,
-            },
-        )
-    except Exception as e:
-        print(f"error fetching student{e}")
-
-
-@app.get("/student/{student_id}/export_portfolio", name="export_student_portfolio")
-async def export_student_portfolio(
-    student_id: int,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
-):
-    """
-    Export a student's portfolio as a CSV file.
-    Only the student's class teacher is authorized to perform this export.
-    """
-    student = db.query(Student).get(student_id)
-    if not student:
-        raise HTTPException(status_code=404, detail="Student not found")
-
-    if student.class_group.teacher_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Permission denied")
-
-    try:
-        output = StringIO()
-        writer = csv.writer(output)
-
-        # Header row
-        writer.writerow(
-            [
-                "Date",
-                "Assignment",
-                "Writing Age",
-                "Score",
-                "Max Score",
-                "Achievement %",
-                "Strengths",
-                "Areas for Development",
-            ]
-        )
-
-        samples = (
-            db.query(Writing)
-            .filter_by(student_id=student_id)
-            .order_by(Writing.created_at.desc())
-            .all()
-        )
-
-        for sample in samples:
-            max_score = len(sample.criteria_marks) * 2 if sample.assignment_id else 0
-            achieved_score = (
-                sum(mark.score for mark in sample.criteria_marks)
-                if sample.assignment_id
-                else 0
-            )
-            percent = (
-                round((achieved_score / max_score * 100), 1) if max_score > 0 else "N/A"
-            )
-
-            feedback_parts = (
-                sample.feedback.split("\n\n") if sample.feedback else ["", ""]
-            )
-            strengths = (
-                feedback_parts[0].replace("Strengths:", "").strip()
-                if len(feedback_parts) > 0
-                else ""
-            )
-            development = (
-                feedback_parts[1].replace("Areas for Development:", "").strip()
-                if len(feedback_parts) > 1
-                else ""
-            )
-
-            writer.writerow(
-                [
-                    sample.created_at.strftime("%Y-%m-%d"),
-                    sample.assignment.title if sample.assignment else "Free Writing",
-                    sample.writing_age,
-                    achieved_score if max_score > 0 else "N/A",
-                    max_score if max_score > 0 else "N/A",
-                    f"{percent}%" if isinstance(percent, (int, float)) else percent,
-                    strengths,
-                    development,
-                ]
-            )
-
-        output.seek(0)
-
-        filename = f"{student.first_name}_{student.last_name}_portfolio_{datetime.now().strftime('%Y%m%d')}.csv"
-        return StreamingResponse(
-            output,
-            media_type="text/csv",
-            headers={"Content-Disposition": f"attachment; filename={filename}"},
-        )
-
-    except Exception as e:
-        logger.error(f"Error exporting portfolio for student {student_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to export portfolio")
-
-
-@app.post("/writing/{writing_id}/update_filename")
-async def update_writing_filename(
-    writing_id: int,
-    request: Request,
-    filename: Optional[str] = Form(None),  # fallback for form submission
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
-):
-    """
-    Update the filename of a writing sample.
-    Accepts both JSON and form data.
-    """
-    try:
-        # Prioritize JSON input
-        if request.headers.get("content-type", "").startswith("application/json"):
-            data = await request.json()
-            new_filename = data.get("filename")
-        else:
-            new_filename = filename
-
-        if not new_filename:
-            if request.headers.get("accept", "").startswith("application/json"):
-                raise HTTPException(status_code=400, detail="Filename is required")
-            return RedirectResponse(
-                url=str(request.headers.get("referer", "/")), status_code=303
-            )
-
-        writing = db.query(Writing).get(writing_id)
-        if not writing:
-            raise HTTPException(status_code=404, detail="Writing not found")
-
-        student = db.query(Student).get(writing.student_id)
-        if not student or student.class_group.teacher_id != current_user["id"]:
-            if request.headers.get("accept", "").startswith("application/json"):
-                raise HTTPException(status_code=403, detail="Unauthorized")
-            return RedirectResponse(url="/", status_code=303)
-
-        writing.filename = new_filename
-        db.commit()
-
-        if request.headers.get("accept", "").startswith("application/json"):
-            return JSONResponse(
-                content={"success": True, "filename": new_filename}, status_code=200
-            )
-        return RedirectResponse(
-            url=str(request.headers.get("referer", "/")), status_code=303
-        )
-
-    except Exception as e:
-        logger.error(f"Error updating writing filename: {str(e)}")
-        db.rollback()
-
-        if request.headers.get("accept", "").startswith("application/json"):
-            raise HTTPException(status_code=500, detail="Failed to update filename")
-        return RedirectResponse(url="/", status_code=303)
-
-
-
-logger = logging.getLogger(__name__)
-
-class BulkDeleteRequest(BaseModel):
-    writing_ids: List[int]
-
-@app.post("/writing/bulk_delete")
-async def bulk_delete_writing(
-    request: Request,
-    db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
-    writing_ids: Optional[Union[List[int], None]] = Form(None)
-):
-    try:
-        if request.headers.get("content-type", "").startswith("application/json"):
-            body = await request.json()
-            writing_ids = body.get("writing_ids", [])
-        else:
-            form = await request.form()
-            writing_ids = form.getlist("writing_ids")
-
-        if not writing_ids:
-            return JSONResponse({"error": "No writing samples selected"}, status_code=status.HTTP_400_BAD_REQUEST)
-
-        # Fetch writings
-        writings = db.query(Writing).filter(Writing.id.in_(writing_ids)).all()
-
-        if not writings:
-            return JSONResponse({"error": "No matching writing samples found"}, status_code=status.HTTP_404_NOT_FOUND)
-
-        student_id = writings[0].student_id if writings else None
-
-        for writing in writings:
-            student = db.query(Student).filter_by(id=writing.student_id).first()
-            if not student or student.class_group.teacher_id != current_user.id:
-                return JSONResponse({"error": "Unauthorized access to one or more writing samples"}, status_code=status.HTTP_403_FORBIDDEN)
-            db.delete(writing)
-
-        db.commit()
-
-        # Respond appropriately based on content type
-        if request.headers.get("content-type", "").startswith("application/json"):
-            return JSONResponse({"success": True}, status_code=status.HTTP_200_OK)
-        else:
-            redirect_url = f"/student/{student_id}/portfolio" if student_id else "/"
-            return RedirectResponse(url=redirect_url, status_code=status.HTTP_303_SEE_OTHER)
-
-    except Exception as e:
-        logger.error(f"Error bulk deleting writing samples: {str(e)}")
-        db.rollback()
-        if request.headers.get("content-type", "").startswith("application/json"):
-            return JSONResponse({"error": "Failed to delete writing samples"}, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        else:
-            return RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
-
-
-@app.get("/writing/{writing_id}/print_report", response_class=HTMLResponse)
-async def print_writing_report(
-    writing_id: int,
-    request: Request,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
-):
-    """
-    Render a printable report of a student's writing sample.
-    """
-    # Fetch writing
-    writing = db.query(Writing).filter_by(id=writing_id).first()
-    if not writing:
-        raise HTTPException(status_code=404, detail="Writing not found")
-
-    # Fetch student
-    student = db.query(Student).filter_by(id=writing.student_id).first()
-    if not student:
-        raise HTTPException(status_code=404, detail="Student not found")
-
-    # Authorization check
-    if student.class_group.teacher_id != current_user.id:
-        return RedirectResponse(url="/", status_code=302)
-
-    # Score calculations
-    total_possible_marks = len(writing.criteria_marks) * 2 if writing.assignment else 0
-    achieved_marks = (
-        sum(mark.score for mark in writing.criteria_marks) if writing.assignment else 0
-    )
-    percentage = (
-        round((achieved_marks / total_possible_marks * 100), 1)
-        if total_possible_marks > 0
-        else 0
-    )
-
-    # Feedback parsing
-    feedback_parts = writing.feedback.split("\n\n") if writing.feedback else ["", ""]
-    strengths = (
-        feedback_parts[0].replace("Strengths:", "").strip() if feedback_parts else ""
-    )
-    development = (
-        feedback_parts[1].replace("Areas for Development:", "").strip()
-        if len(feedback_parts) > 1
-        else ""
-    )
-
-    # Age calculations
-    student_age = (writing.created_at.date() - student.date_of_birth).days / 365.25
-    student_age_str = f"{int(student_age)} years {int((student_age % 1) * 12)} months"
-    writing_age_str = (
-        writing.writing_age.replace("Estimated writing age:", "").strip()
-        if writing.writing_age
-        else "N/A"
-    )
-
-    return templates.TemplateResponse(
-        "print_report.html",
-        {
-            "request": request,
-            "writing": writing,
-            "student": student,
-            "total_marks": total_possible_marks,
-            "achieved_marks": achieved_marks,
-            "percentage": percentage,
-            "strengths": strengths,
-            "development": development,
-            "student_age": student_age_str,
-            "writing_age": writing_age_str,
-        },
-    )
-
-
-@app.post("/student/{student_id}/delete")
-def delete_student(
-    request: Request,
-    student_id,
-    db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
-):
-    from models import Student
-
-    student = db.query(Student).get(student_id)
-
-    # Check if current user is the teacher of this student's class
-    if student.class_group.teacher_id != current_user.id:
-        return JSONResponse(status_code=403, detail={"error": "Unauthorized"})
-
-    try:
-        db.delete(student)
-        db.commit()
-        request.session["flash"] = {"message": "Class ID is required", "type": "error"}
-        return JSONResponse(status_code=200, detail={"sucess": True})
-    except Exception as e:
-        logger.error(f"Error deleting student: {str(e)}")
-        db.rollback()
-        return JSONResponse(
-            status_code=500, detail={"error": "Failed to delete student"}
-        )
-
-
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 
 @app.get("/assignment/{assignment_id}/class-feedback")
@@ -4244,27 +3359,941 @@ def delete_student(
         )
 
 
-@app.post('/wagoll_example/save')
-async def save_wagoll_example(request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+@app.get("/assignment/{assignment_id}/class-feedback")
+def get_class_feedback(
+    assignment_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    assignment = db.query(Assignment).get(assignment_id)
+    if not assignment or assignment.class_group.teacher_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+
+    try:
+        submissions = db.query(Writing).filter_by(assignment_id=assignment_id).all()
+
+        if not submissions:
+            return JSONResponse(
+                content={
+                    "strengths": ["No submissions to analyze"],
+                    "areas_for_development": ["No submissions to analyze"],
+                    "practice_activities": ["No submissions to analyze"],
+                }
+            )
+
+        max_submissions = min(len(submissions), 10)
+        submissions = submissions[:max_submissions]
+
+        criteria_scores = {}
+        common_strengths = []
+        common_weaknesses = []
+        avg_writing_age = 0
+        writing_age_count = 0
+
+        for submission in submissions:
+            if submission.writing_age:
+                try:
+                    years = float(submission.writing_age.split(" years")[0])
+                    avg_writing_age += years
+                    writing_age_count += 1
+                except (ValueError, IndexError):
+                    continue
+
+            if submission.feedback:
+                parts = submission.feedback.split("\n\n")
+                if len(parts) >= 1:
+                    for line in parts[0].replace("Strengths:", "").split("\n"):
+                        if line.strip().startswith("- "):
+                            common_strengths.append(line.strip()[2:])
+                if len(parts) >= 2:
+                    for line in (
+                        parts[1].replace("Areas for Development:", "").split("\n")
+                    ):
+                        if line.strip().startswith("- "):
+                            common_weaknesses.append(line.strip()[2:])
+
+            for mark in submission.criteria_marks:
+                key = mark.criteria.description
+                if key not in criteria_scores:
+                    criteria_scores[key] = {"total": mark.score, "count": 1}
+                else:
+                    criteria_scores[key]["total"] += mark.score
+                    criteria_scores[key]["count"] += 1
+
+        if writing_age_count:
+            avg_writing_age /= writing_age_count
+
+        avg_criteria = [
+            {"criterion": k, "avg_score": v["total"] / v["count"]}
+            for k, v in criteria_scores.items()
+        ]
+        avg_criteria.sort(key=lambda x: x["avg_score"])
+
+        analysis_prompt = f"""Analyze this class's writing submissions for a specific assignment and provide exactly:
+
+        1. Three clear class strengths
+        2. Three specific areas for development
+        3. Four practical practice activities
+
+        Format your response as a JSON object with exactly these keys:
+        {{
+            "strengths": [3 strength items],
+            "areas_for_development": [3 development items],
+            "practice_activities": [4 activity items]
+        }}
+
+        Assignment Details:
+        Title: {assignment.title}
+        Genre: {assignment.genre}
+        Curriculum: {assignment.curriculum}
+        Number of Submissions Analyzed: {max_submissions} (out of {len(submissions)})
+        Average Writing Age: {avg_writing_age:.1f} years"""
+
+        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        MODEL_NAME = "gpt-4o"
+
+        response = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {"role": "system", "content": analysis_prompt},
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "highest_scoring_criteria": [
+                                c for c in avg_criteria[-3:] if c["avg_score"] > 1
+                            ],
+                            "lowest_scoring_criteria": [
+                                c for c in avg_criteria[:3] if c["avg_score"] < 1
+                            ],
+                            "common_strengths": common_strengths[:10],
+                            "common_weaknesses": common_weaknesses[:10],
+                            "avg_writing_age": avg_writing_age,
+                        }
+                    ),
+                },
+            ],
+            response_format={"type": "json_object"},
+        )
+
+        analysis = json.loads(response.choices[0].message.content)
+        return JSONResponse(
+            content={
+                "strengths": analysis.get("strengths", ["No strengths identified"]),
+                "areas_for_development": analysis.get(
+                    "areas_for_development", ["No areas identified"]
+                ),
+                "practice_activities": analysis.get(
+                    "practice_activities", ["No activities suggested"]
+                ),
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error generating class feedback: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "strengths": ["Error analyzing submissions"],
+                "areas_fordevelopment": ["Error analyzing submissions"],
+                "practice_activities": ["Error analyzing submissions"],
+            },
+        )
+
+
+@app.get("/data_analysis", response_class=HTMLResponse)
+async def data_analysis(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    user_classes = db.query(Class).filter_by(teacher_id=current_user.id).all()
+    now = datetime.now()
+
+    return templates.TemplateResponse(
+        "data_analysis.html", {"request": request, "classes": user_classes, "now": now}
+    )
+
+
+@app.get("/api/students")
+async def get_api_students(
+    class_id: str = Query("all"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if class_id == "all":
+        students = (
+            db.query(Student)
+            .join(Class)
+            .filter(Class.teacher_id == current_user.id)
+            .order_by(Student.first_name, Student.last_name)
+            .all()
+        )
+    else:
+        students = (
+            db.query(Student)
+            .join(Class)
+            .filter(Class.id == class_id, Class.teacher_id == current_user.id)
+            .order_by(Student.first_name, Student.last_name)
+            .all()
+        )
+
+    return JSONResponse(
+        {
+            "students": [
+                {
+                    "id": student.id,
+                    "name": f"{student.first_name} {student.last_name}",
+                    "class_id": student.class_id,
+                }
+                for student in students
+            ]
+        }
+    )
+
+
+@app.get("/api/student_data")
+async def get_api_student_data(
+    ids: Optional[str] = Query(default=""),
+    class_id: Optional[str] = Query(default="all"),
+    time_period: Optional[str] = Query(default="all"),
+    chart_type: Optional[str] = Query(default="writing_scores"),
+    include_average: Optional[bool] = Query(default=False),
+    average_type: Optional[str] = Query(default="all"),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    student_id_list = [int(sid) for sid in ids.split(",") if sid.isdigit()]
+    time_filter = None
+
+    if time_period != "all":
+        now = datetime.now()
+        days_map = {"month": 30, "quarter": 90, "year": 365}
+        if time_period in days_map:
+            time_filter = now - timedelta(days=days_map[time_period])
+
+    datasets = []
+    all_dates = set()
+
+    for student_id in student_id_list:
+        student = (
+            db.query(Student)
+            .join(Class)
+            .filter(Student.id == student_id, Class.teacher_id == current_user.id)
+            .first()
+        )
+        if not student:
+            continue
+
+        query = db.query(Writing).filter(Writing.student_id == student_id)
+        if time_filter:
+            query = query.filter(Writing.created_at >= time_filter)
+        samples = query.order_by(Writing.created_at).all()
+
+        data_points = []
+        for sample in samples:
+            value = None
+            if chart_type == "writing_scores" and sample.criteria_marks:
+                total = len(sample.criteria_marks)
+                met = sum(1 for m in sample.criteria_marks if m.score == 2)
+                partial = sum(1 for m in sample.criteria_marks if m.score == 1)
+                value = (met / total) * 100 + (partial / total) * 50
+            elif chart_type == "writing_age" and sample.writing_age:
+                try:
+                    value = float(sample.writing_age.split()[0])
+                except:
+                    continue
+            elif chart_type == "age_difference" and sample.writing_age:
+                try:
+                    writing_age = float(sample.writing_age.split()[0])
+                    actual_age = (
+                        sample.created_at.date() - student.date_of_birth
+                    ).days / 365.25
+                    value = writing_age - actual_age
+                except:
+                    continue
+            else:
+                continue
+
+            date_str = f"{sample.created_at.strftime('%Y-%m-%d')} ({sample.id})"
+            date_display = sample.created_at.strftime("%d %b %Y")
+            all_dates.add(date_str)
+            data_points.append(
+                {
+                    "date": date_str,
+                    "date_display": date_display,
+                    "value": value,
+                    "writing_id": sample.id,
+                }
+            )
+
+        if data_points:
+            sorted_points = sorted(data_points, key=lambda x: x["date"])
+            datasets.append(
+                {
+                    "student_id": student.id,
+                    "name": f"{student.first_name} {student.last_name}",
+                    "data": [p["value"] for p in sorted_points],
+                    "dates": [p["date"] for p in sorted_points],
+                    "is_average": False,
+                }
+            )
+
+    # Average dataset for class
+    if include_average and class_id != "all" and class_id.isdigit():
+        class_obj = (
+            db.query(Class)
+            .filter_by(id=int(class_id), teacher_id=current_user.id)
+            .first()
+        )
+        if class_obj:
+            student_ids = [
+                s.id for s in db.query(Student).filter_by(class_id=class_obj.id).all()
+            ]
+            all_dates_list = sorted(all_dates)
+            avg_data = []
+
+            for date_str in all_dates_list:
+                if " (" in date_str:
+                    date_part = date_str.split(" (")[0]
+                    date_obj = datetime.strptime(date_part, "%Y-%m-%d").date()
+                    next_day = date_obj + timedelta(days=1)
+                    writings = (
+                        db.query(Writing)
+                        .filter(
+                            Writing.student_id.in_(student_ids),
+                            Writing.created_at >= date_obj,
+                            Writing.created_at < next_day,
+                        )
+                        .all()
+                    )
+
+                    values = []
+                    for w in writings:
+                        if chart_type == "writing_scores" and w.criteria_marks:
+                            total = len(w.criteria_marks)
+                            achieved = sum(m.score for m in w.criteria_marks)
+                            if total:
+                                values.append((achieved / (total * 2)) * 100)
+                        elif chart_type == "writing_age" and w.writing_age:
+                            try:
+                                values.append(float(w.writing_age.split()[0]))
+                            except:
+                                pass
+                        elif chart_type == "age_difference" and w.writing_age:
+                            try:
+                                writing_age = float(w.writing_age.split()[0])
+                                actual_age = (
+                                    w.created_at.date() - student.date_of_birth
+                                ).days / 365.25
+                                values.append(writing_age - actual_age)
+                            except:
+                                pass
+                    avg_data.append(sum(values) / len(values) if values else None)
+
+            if any(avg_data):
+                datasets.append(
+                    {
+                        "student_id": "average",
+                        "name": f"{class_obj.name} Class Average",
+                        "data": avg_data,
+                        "dates": all_dates_list,
+                        "is_average": True,
+                    }
+                )
+
+    # Format date display map
+    date_display_map = {}
+    for ds in datasets:
+        for date_key in ds.get("dates", []):
+            if " (" in date_key:
+                date_part = date_key.split(" (")[0]
+                try:
+                    date_obj = datetime.strptime(date_part, "%Y-%m-%d")
+                    display = date_obj.strftime("%d %b %Y")
+                    date_display_map[date_key] = display
+                except:
+                    date_display_map[date_key] = date_key
+
+    insights = {}
+    if datasets:
+        insights = {
+            "key_observations": [
+                "Select multiple students to compare their progress over time.",
+                "Use the chart filters to explore different metrics and time periods.",
+            ],
+            "recommendations": "Focus on students showing significant differences from the class average.",
+        }
+
+    return JSONResponse(
+        {
+            "labels": sorted(all_dates),
+            "date_displays": date_display_map,
+            "datasets": datasets,
+            "insights": insights,
+        }
+    )
+
+
+@app.get("/student/{student_id}/portfolio", name="student_portfolio")
+async def student_portfolio(
+    student_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        student = db.query(Student).filter(Student.id == student_id).first()
+
+        if not student:
+            raise HTTPException(status_code=404, detail="Student not found")
+
+        # Permission check
+        if student.class_group.teacher_id != current_user.id:
+            request.session["flash"] = {
+                "message": "You do not have permission to view this portfolio.",
+                "category": "danger",
+            }
+            return RedirectResponse(url="/", status_code=303)
+
+        from sqlalchemy.orm import joinedload
+
+        writing_samples = (
+            db.query(Writing)
+            .options(joinedload(Writing.criteria_marks), joinedload(Writing.assignment))
+            .filter(Writing.student_id == student_id)
+            .order_by(Writing.created_at.desc())
+            .all()
+        )
+
+        assignments = (
+            db.query(Assignment).filter(Assignment.class_id == student.class_id).all()
+        )
+
+        # Average criteria met
+        total_criteria_scores = 0
+        total_criteria_count = 0
+        for sample in writing_samples:
+            if sample.criteria_marks:
+                total_criteria_count += len(sample.criteria_marks)
+                total_criteria_scores += sum(
+                    mark.score for mark in sample.criteria_marks
+                )
+
+        average_criteria_met = (
+            (total_criteria_scores / (total_criteria_count * 2)) * 100
+            if total_criteria_count > 0
+            else None
+        )
+
+        # Progress rating calculation
+        age_differences = []
+        for sample in writing_samples:
+            if sample.writing_age:
+                try:
+                    writing_age_value = float(sample.writing_age.split()[0])
+                    today = datetime.now().date()
+                    birth_date = student.date_of_birth
+                    student_age = (today - birth_date).days / 365.25
+                    age_diff = round(writing_age_value - student_age, 1)
+
+                    age_differences.append(
+                        {
+                            "sample_id": sample.id,
+                            "date": sample.created_at,
+                            "filename": sample.filename,
+                            "writing_age": writing_age_value,
+                            "student_age": student_age,
+                            "difference": age_diff,
+                            "assignment": (
+                                sample.assignment.title
+                                if sample.assignment
+                                else "No Assignment"
+                            ),
+                        }
+                    )
+                except (ValueError, AttributeError, IndexError):
+                    continue
+
+        progress_rating = None
+        if age_differences:
+            age_differences.sort(key=lambda x: x["date"], reverse=True)
+            latest = age_differences[: min(3, len(age_differences))]
+            avg_diff = sum(item["difference"] for item in latest) / len(latest)
+            if avg_diff >= 3:
+                progress_rating = "Excellent"
+            elif avg_diff >= 2:
+                progress_rating = "Very Good"
+            elif avg_diff >= 1:
+                progress_rating = "Good"
+            elif avg_diff >= 0:
+                progress_rating = "Satisfactory"
+            else:
+                progress_rating = "Needs Support"
+
+        # Chart data prep
+        chart_data = {
+            "labels": [],
+            "datasets": [
+                {
+                    "label": "Assignment Score",
+                    "data": [],
+                    "backgroundColor": "rgba(75, 192, 192, 0.2)",
+                    "borderColor": "rgba(75, 192, 192, 1)",
+                    "borderWidth": 2,
+                    "pointRadius": 5,
+                    "pointBackgroundColor": "rgba(75, 192, 192, 1)",
+                    "fill": True,
+                }
+            ],
+        }
+
+        age_chart_data = {
+            "labels": [],
+            "datasets": [
+                {
+                    "label": "Writing Age",
+                    "data": [],
+                    "borderColor": "rgba(54, 162, 235, 1)",
+                    "backgroundColor": "rgba(54, 162, 235, 0.2)",
+                    "borderWidth": 2,
+                    "pointRadius": 5,
+                    "fill": False,
+                },
+                {
+                    "label": "Actual Age",
+                    "data": [],
+                    "borderColor": "rgba(255, 99, 132, 1)",
+                    "backgroundColor": "rgba(255, 99, 132, 0.2)",
+                    "borderWidth": 2,
+                    "pointRadius": 5,
+                    "fill": False,
+                },
+            ],
+        }
+
+        for sample in reversed(writing_samples):
+            chart_data["labels"].append(sample.created_at.strftime("%d %b %Y"))
+            if sample.criteria_marks:
+                total_marks = len(sample.criteria_marks)
+                score = sum(mark.score for mark in sample.criteria_marks)
+                chart_data["datasets"][0]["data"].append(
+                    (score / (total_marks * 2)) * 100
+                )
+            else:
+                chart_data["datasets"][0]["data"].append(0)
+
+            if sample.writing_age:
+                try:
+                    writing_age_val = float(sample.writing_age.split()[0])
+                    today = datetime.now().date()
+                    birth_date = student.date_of_birth
+                    student_age = (today - birth_date).days / 365.25
+                    age_chart_data["labels"].append(
+                        sample.created_at.strftime("%d %b %Y")
+                    )
+                    age_chart_data["datasets"][0]["data"].append(writing_age_val)
+                    age_chart_data["datasets"][1]["data"].append(student_age)
+                except Exception:
+                    continue
+
+        # Prev/next student navigation
+        class_students = (
+            db.query(Student)
+            .filter(Student.class_id == student.class_id)
+            .order_by(Student.first_name)
+            .all()
+        )
+        current_index = next(
+            (i for i, s in enumerate(class_students) if s.id == student.id), None
+        )
+
+        prev_student = (
+            class_students[current_index - 1]
+            if current_index and current_index > 0
+            else class_students[-1]
+        )
+        next_student = (
+            class_students[(current_index + 1) % len(class_students)]
+            if current_index is not None
+            else None
+        )
+
+        return templates.TemplateResponse(
+            "student_portfolio_new_temp.html",
+            context={
+                "request": request,
+                "student": student,
+                "writing_samples": writing_samples,
+                "assignments": assignments,
+                "average_criteria_met": average_criteria_met,
+                "progress_rating": progress_rating,
+                "prev_student": prev_student,
+                "next_student": next_student,
+                "chart_data": json.dumps(chart_data),
+                "age_chart_data": json.dumps(age_chart_data),
+                "age_differences": age_differences,
+            },
+        )
+    except Exception as e:
+        print(f"error fetching student{e}")
+
+
+@app.get("/student/{student_id}/export_portfolio", name="export_student_portfolio")
+async def export_student_portfolio(
+    student_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Export a student's portfolio as a CSV file.
+    Only the student's class teacher is authorized to perform this export.
+    """
+    student = db.query(Student).get(student_id)
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    if student.class_group.teacher_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Permission denied")
+
+    try:
+        output = StringIO()
+        writer = csv.writer(output)
+
+        # Header row
+        writer.writerow(
+            [
+                "Date",
+                "Assignment",
+                "Writing Age",
+                "Score",
+                "Max Score",
+                "Achievement %",
+                "Strengths",
+                "Areas for Development",
+            ]
+        )
+
+        samples = (
+            db.query(Writing)
+            .filter_by(student_id=student_id)
+            .order_by(Writing.created_at.desc())
+            .all()
+        )
+
+        for sample in samples:
+            max_score = len(sample.criteria_marks) * 2 if sample.assignment_id else 0
+            achieved_score = (
+                sum(mark.score for mark in sample.criteria_marks)
+                if sample.assignment_id
+                else 0
+            )
+            percent = (
+                round((achieved_score / max_score * 100), 1) if max_score > 0 else "N/A"
+            )
+
+            feedback_parts = (
+                sample.feedback.split("\n\n") if sample.feedback else ["", ""]
+            )
+            strengths = (
+                feedback_parts[0].replace("Strengths:", "").strip()
+                if len(feedback_parts) > 0
+                else ""
+            )
+            development = (
+                feedback_parts[1].replace("Areas for Development:", "").strip()
+                if len(feedback_parts) > 1
+                else ""
+            )
+
+            writer.writerow(
+                [
+                    sample.created_at.strftime("%Y-%m-%d"),
+                    sample.assignment.title if sample.assignment else "Free Writing",
+                    sample.writing_age,
+                    achieved_score if max_score > 0 else "N/A",
+                    max_score if max_score > 0 else "N/A",
+                    f"{percent}%" if isinstance(percent, (int, float)) else percent,
+                    strengths,
+                    development,
+                ]
+            )
+
+        output.seek(0)
+
+        filename = f"{student.first_name}_{student.last_name}_portfolio_{datetime.now().strftime('%Y%m%d')}.csv"
+        return StreamingResponse(
+            output,
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
+        )
+
+    except Exception as e:
+        logger.error(f"Error exporting portfolio for student {student_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to export portfolio")
+
+
+@app.post("/writing/{writing_id}/update_filename")
+async def update_writing_filename(
+    writing_id: int,
+    request: Request,
+    filename: Optional[str] = Form(None),  
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Update the filename of a writing sample.
+    Accepts both JSON and form data.
+    """
+    try:
+
+        if request.headers.get("content-type", "").startswith("application/json"):
+            data = await request.json()
+            new_filename = data.get("filename")
+        else:
+            new_filename = filename
+
+        if not new_filename:
+            if request.headers.get("accept", "").startswith("application/json"):
+                raise HTTPException(status_code=400, detail="Filename is required")
+            return RedirectResponse(
+                url=str(request.headers.get("referer", "/")), status_code=303
+            )
+
+        writing = db.query(Writing).get(writing_id)
+        if not writing:
+            raise HTTPException(status_code=404, detail="Writing not found")
+
+        student = db.query(Student).get(writing.student_id)
+        if not student or student.class_group.teacher_id != current_user["id"]:
+            if request.headers.get("accept", "").startswith("application/json"):
+                raise HTTPException(status_code=403, detail="Unauthorized")
+            return RedirectResponse(url="/", status_code=303)
+
+        writing.filename = new_filename
+        db.commit()
+
+        if request.headers.get("accept", "").startswith("application/json"):
+            return JSONResponse(
+                content={"success": True, "filename": new_filename}, status_code=200
+            )
+        return RedirectResponse(
+            url=str(request.headers.get("referer", "/")), status_code=303
+        )
+
+    except Exception as e:
+        logger.error(f"Error updating writing filename: {str(e)}")
+        db.rollback()
+
+        if request.headers.get("accept", "").startswith("application/json"):
+            raise HTTPException(status_code=500, detail="Failed to update filename")
+        return RedirectResponse(url="/", status_code=303)
+
+
+logger = logging.getLogger(__name__)
+
+
+class BulkDeleteRequest(BaseModel):
+    writing_ids: List[int]
+
+
+@app.post("/writing/bulk_delete")
+async def bulk_delete_writing(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+    writing_ids: Optional[Union[List[int], None]] = Form(None),
+):
+    try:
+        if request.headers.get("content-type", "").startswith("application/json"):
+            body = await request.json()
+            writing_ids = body.get("writing_ids", [])
+        else:
+            form = await request.form()
+            writing_ids = form.getlist("writing_ids")
+
+        if not writing_ids:
+            return JSONResponse(
+                {"error": "No writing samples selected"},
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Fetch writings
+        writings = db.query(Writing).filter(Writing.id.in_(writing_ids)).all()
+
+        if not writings:
+            return JSONResponse(
+                {"error": "No matching writing samples found"},
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+
+        student_id = writings[0].student_id if writings else None
+
+        for writing in writings:
+            student = db.query(Student).filter_by(id=writing.student_id).first()
+            if not student or student.class_group.teacher_id != current_user.id:
+                return JSONResponse(
+                    {"error": "Unauthorized access to one or more writing samples"},
+                    status_code=status.HTTP_403_FORBIDDEN,
+                )
+            db.delete(writing)
+
+        db.commit()
+
+        if request.headers.get("content-type", "").startswith("application/json"):
+            return JSONResponse({"success": True}, status_code=status.HTTP_200_OK)
+        else:
+            redirect_url = f"/student/{student_id}/portfolio" if student_id else "/"
+            return RedirectResponse(
+                url=redirect_url, status_code=status.HTTP_303_SEE_OTHER
+            )
+
+    except Exception as e:
+        logger.error(f"Error bulk deleting writing samples: {str(e)}")
+        db.rollback()
+        if request.headers.get("content-type", "").startswith("application/json"):
+            return JSONResponse(
+                {"error": "Failed to delete writing samples"},
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        else:
+            return RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.get("/writing/{writing_id}/print_report", response_class=HTMLResponse)
+async def print_writing_report(
+    writing_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Render a printable report of a student's writing sample.
+    """
+    # Fetch writing
+    writing = db.query(Writing).filter_by(id=writing_id).first()
+    if not writing:
+        raise HTTPException(status_code=404, detail="Writing not found")
+
+    # Fetch student
+    student = db.query(Student).filter_by(id=writing.student_id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    # Authorization check
+    if student.class_group.teacher_id != current_user.id:
+        return RedirectResponse(url="/", status_code=302)
+
+    # Score calculations
+    total_possible_marks = len(writing.criteria_marks) * 2 if writing.assignment else 0
+    achieved_marks = (
+        sum(mark.score for mark in writing.criteria_marks) if writing.assignment else 0
+    )
+    percentage = (
+        round((achieved_marks / total_possible_marks * 100), 1)
+        if total_possible_marks > 0
+        else 0
+    )
+
+    # Feedback parsing
+    feedback_parts = writing.feedback.split("\n\n") if writing.feedback else ["", ""]
+    strengths = (
+        feedback_parts[0].replace("Strengths:", "").strip() if feedback_parts else ""
+    )
+    development = (
+        feedback_parts[1].replace("Areas for Development:", "").strip()
+        if len(feedback_parts) > 1
+        else ""
+    )
+
+    # Age calculations
+    student_age = (writing.created_at.date() - student.date_of_birth).days / 365.25
+    student_age_str = f"{int(student_age)} years {int((student_age % 1) * 12)} months"
+    writing_age_str = (
+        writing.writing_age.replace("Estimated writing age:", "").strip()
+        if writing.writing_age
+        else "N/A"
+    )
+
+    return templates.TemplateResponse(
+        "print_report.html",
+        {
+            "request": request,
+            "writing": writing,
+            "student": student,
+            "total_marks": total_possible_marks,
+            "achieved_marks": achieved_marks,
+            "percentage": percentage,
+            "strengths": strengths,
+            "development": development,
+            "student_age": student_age_str,
+            "writing_age": writing_age_str,
+        },
+    )
+
+
+@app.post("/student/{student_id}/delete")
+def delete_student(
+    request: Request,
+    student_id,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    from models import Student
+
+    student = db.query(Student).get(student_id)
+
+    # Check if current user is the teacher of this student's class
+    if student.class_group.teacher_id != current_user.id:
+        return JSONResponse(status_code=403, detail={"error": "Unauthorized"})
+
+    try:
+        db.delete(student)
+        db.commit()
+        request.session["flash"] = {"message": "Class ID is required", "type": "error"}
+        return JSONResponse(status_code=200, detail={"sucess": True})
+    except Exception as e:
+        logger.error(f"Error deleting student: {str(e)}")
+        db.rollback()
+        return JSONResponse(
+            status_code=500, detail={"error": "Failed to delete student"}
+        )
+
+
+@app.post("/wagoll_example/save")
+async def save_wagoll_example(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """Save a WAGOLL example."""
     from models import WagollExample, Assignment
 
     try:
         data = await request.json()
-        assignment_id = data.get('assignment_id')
-        title = data.get('title')
-        content = data.get('content')
-        explanations = data.get('explanations')
-        is_public = data.get('is_public', False)
+        assignment_id = data.get("assignment_id")
+        title = data.get("title")
+        content = data.get("content")
+        explanations = data.get("explanations")
+        is_public = data.get("is_public", False)
 
         if not title or not content:
-            return JSONResponse(status_code=400, content={'success': False, 'error': 'Title and content are required'})
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": "Title and content are required"},
+            )
 
         # If assignment_id is provided, verify ownership
         if assignment_id:
             assignment = db.query(Assignment).get(assignment_id)
-            if not assignment or not assignment.class_group or assignment.class_group.teacher_id != current_user.id:
-                return JSONResponse(status_code=403, content={'success': False, 'error': 'Unauthorized'})
+            if (
+                not assignment
+                or not assignment.class_group
+                or assignment.class_group.teacher_id != current_user.id
+            ):
+                return JSONResponse(
+                    status_code=403, content={"success": False, "error": "Unauthorized"}
+                )
 
         # Create the WAGOLL example
         example = WagollExample(
@@ -4273,43 +4302,45 @@ async def save_wagoll_example(request: Request, db: Session = Depends(get_db), c
             explanations=explanations,
             is_public=is_public,
             assignment_id=assignment_id,
-            teacher_id=current_user.id
+            teacher_id=current_user.id,
         )
 
         db.add(example)
         db.commit()
 
-        return JSONResponse(content={
-            'success': True,
-            'id': example.id
-        })
+        return JSONResponse(content={"success": True, "id": example.id})
 
     except Exception as e:
         logger.error(f"Error saving WAGOLL example: {str(e)}")
         db.rollback()
-        return JSONResponse(status_code=500, content={'success': False, 'error': str(e)})
+        return JSONResponse(
+            status_code=500, content={"success": False, "error": str(e)}
+        )
 
 
-@app.post('/wagoll_example/{example_id}/delete')
-def delete_wagoll_example(example_id, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+@app.post("/wagoll_example/{example_id}/delete")
+def delete_wagoll_example(
+    example_id,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """Delete a WAGOLL example."""
     from models import WagollExample
 
-    # Get the example and verify ownership
     example = db.query(WagollExample).get(example_id)
     if example.teacher_id != current_user.id:
-        return JSONResponse(status_code=403, content={'error': 'Unauthorized'})
+        return JSONResponse(status_code=403, content={"error": "Unauthorized"})
 
     try:
         db.delete(example)
         db.commit()
 
-        return JSONResponse(status_code=200, content={'success': True})
+        return JSONResponse(status_code=200, content={"success": True})
 
     except Exception as e:
         logger.error(f"Error deleting WAGOLL example: {str(e)}")
         db.rollback()
-        return JSONResponse(status_code=500, content={'error': str(e)})
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 
 @app.get("/assignments", response_class=HTMLResponse)

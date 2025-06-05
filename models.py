@@ -195,7 +195,7 @@ class CriteriaMark(Base):
     id = Column(Integer, primary_key=True)
     score = Column(
         Integer, nullable=False
-    )  # 0=not met, 1=partially met, 2=confidently used
+    ) 
     writing_id = Column(
         Integer, ForeignKey("writing.id", ondelete="CASCADE"), nullable=False
     )
@@ -239,7 +239,7 @@ class WagollExample(Base):
     )
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
-    # Add relationship to assignment
+   
     assignment = relationship("Assignment", backref="wagollexamples", lazy=True)
 
 
