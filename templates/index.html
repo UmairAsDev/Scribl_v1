@@ -285,12 +285,12 @@
                                 <button type="button" class="btn btn-outline-primary mt-3" id="add-more-btn">
                                     <i class="fa fa-plus me-2"></i>Add Another Image
                                 </button>
-                                {% if is_mobile %}
+                                {% comment %} {% if is_mobile %}
                                     <form action="/upload" method="post" enctype="multipart/form-data">
                                     <input type="file" name="photo" accept="image/*" capture="environment">
                                     <button type="submit">Upload</button>
                                     </form>
-                                {% endif %}
+                                {% endif %} {% endcomment %}
 
                             </div>
                         </div>
