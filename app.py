@@ -1898,9 +1898,9 @@ async def process_images_ocr(
         base64_image = encode_image_to_base64(processed_img_bytes)
 
         system_prompt = (
-            "You are an expert at transcribing children's handwritten text..."
+            "You are an expert at transcribing children's handwritten text and able to analyze all types of handwriting styles including messy writing(if it's too messy then guess it most logically). Also you are able to analyze the text wether it's appear in light or in dark mode or a shadow appears on pic..."
             if is_young_writer
-            else "You are an expert at transcribing handwritten text..."
+            else "You are an expert at transcribing handwritten text and able to analyze all types of handwriting styles including messy writing(if it's too messy then guess it most logically). Also you are able to analyze the text wether it's appear in light or in dark mode or a shadow appears on pic..."
         )
 
         response = client.chat.completions.create(
@@ -1912,7 +1912,7 @@ async def process_images_ocr(
                     "content": [
                         {
                             "type": "text",
-                            "text": "Transcribe this handwritten text exactly as it appears.",
+                            "text": "Transcribe this handwritten text exactly as it appears. Text can be in different writing styles and can be incomplete. Image can be light or dark",
                         },
                         {
                             "type": "image_url",
@@ -1991,40 +1991,50 @@ async def process_images_ocr(
     criteria_marks = []
 
     if assignment:
-        criteria_prompt = """You are an expert teacher evaluating a writing sample against specific success criteria.
+        criteria_prompt = """
+        You are an expert teacher across all academic domains.
+        Your role is to evaluate writing samples against defined success criteria, providing consistent and evidence-based scoring.
 
-        For each criterion, you must evaluate CONSISTENTLY using these specific scoring guidelines
-        Score 0 = Not met:
-        - The required skill/element is completely absent
-        - No evidence of attempting the criterion
-        - Significant errors that impede understandin
-        Score 1 = Partially met:
-        - The skill/element is present but inconsistent
-        - Basic or limited demonstration of the criterion
-        - Some errors but meaning is generally clea
-        Score 2 = Confidently used:
-        - Consistent and effective use throughout
-        - Clear evidence of mastery of the criterion
-        - Minimal errors that don't impact understandin
-        IMPORTANT SCORING RULES:
-        1. Be consistent - similar writing should receive similar scores
-        2. Focus on evidence - cite specific examples from the text
-        3. Consider age-appropriate expectations
-        4. Score each criterion independently
-        5. Avoid being influenced by overall impression
+        Evaluation Principles:
+            - Always evaluate and score every piece of writing, even if it’s messy, incomplete, or written in an unusual style.
+            - Apply the scoring guide consistently across all samples.
+            - Use textual evidence to justify each score.
 
-        Criteria to evaluate:
+        Scoring Guide:
+        Score 0 — Not Met
+            - The required skill or element is completely missing.
+            - No evidence of an attempt to meet the criterion.
+            - Major errors or omissions that impede understanding.
+
+        Score 1 — Partially Met
+            - The skill or element appears but is inconsistent or underdeveloped.
+            - Shows a basic or emerging understanding of the criterion.
+            - Some errors are present, but meaning remains mostly clear.
+
+        Score 2 — Confidently Used
+            - The skill or element is applied consistently and effectively.
+            - Clear and sustained evidence of mastery.
+            - Only minor errors that do not affect understanding.
+
+        Scoring Rules:
+            - Always assign a score for each criterion — never skip.
+            - Maintain consistency — similar writing should receive similar scores.
+            - Support all scoring decisions with direct evidence from the text.
+            - Consider age-appropriate expectations when judging proficiency.
+            - Evaluate each criterion independently — do not let overall impression bias results.
+            - Focus strictly on the defined criteria — ignore unrelated or extra content.
+
         """
         for criterion in assignment.criteria:
             criteria_prompt += f"- {criterion.description}\n"
 
         criteria_prompt += """
-        Analyze the text thoroughly and respond with a JSON object in this exact format:
+        You must always analyze the text thoroughly always and respond with a JSON object in this exact format:
         {
             "evaluations": [
                 {
                     "criterion": "exact criterion text",
-                    "score": number (0, 1, or 2),
+                    "score": number (0, 1, or 2 only),
                     "justification": "MUST include specific examples from the text that justify this score"
                 }
             ]
