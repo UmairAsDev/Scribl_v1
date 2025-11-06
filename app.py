@@ -21,7 +21,6 @@ from fastapi.staticfiles import StaticFiles
 from starlette.responses import Response, HTMLResponse, StreamingResponse
 from starlette.status import (
     HTTP_302_FOUND,
-    HTTP_201_CREATED,
     HTTP_200_OK,
     HTTP_500_INTERNAL_SERVER_ERROR,
     HTTP_303_SEE_OTHER,
@@ -95,6 +94,7 @@ allowed_hosts = [
     "localhost",
     "127.0.0.1",
     "js-projects-scribl.wjhk3s.easypanel.host",
+    "js-projects-scribl.hfbenr.easypanel.host",
     "scribl-v1.onrender.com",
     "*.onrender.com",
 ]
