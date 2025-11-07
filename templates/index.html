@@ -282,22 +282,23 @@
                                     </button>
                                     <div class="images-indicator">Image 1 of 1</div>
                                 </div>
-                                <button type="button" class="btn btn-outline-primary mt-3" id="add-more-btn">
+                                <button type="button" class="btn btn-outline-primary m-3" id="add-more-btn">
                                     <i class="fa fa-plus me-2"></i>Add Another Image
                                 </button>
                                 {% if is_mobile %}
                                     <form action="/upload" method="post" enctype="multipart/form-data">
-                                    <input type="file" name="photo" accept="image/*" capture="environment">
-                                    <button type="submit">Upload</button>
+                                    <input type="file" name="photo" accept="image/*" capture="environment" style="display: none;">
+                                   
+                                     <button type="submit" id="process-image" class="btn btn-primary w-100" disabled>
+                                        <i class="fa fa-upload me-2"></i>Process Images
+                                    </button>
                                     </form>
                                 {% endif %}
 
                             </div>
                         </div>
 
-                        <button type="submit" id="process-image" class="btn btn-primary w-100" disabled>
-                            <i class="fa fa-upload me-2"></i>Process Images
-                        </button>
+        
                     </form>
 
                     <div id="loading" class="text-center d-none">
