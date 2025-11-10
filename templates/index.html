@@ -266,7 +266,9 @@
                                     <i class="fa fa-image me-2"></i>Upload Image
                                 </button>
                             </div>
-                            <input type="file" class="form-control d-none" id="image-upload" accept="image/*" capture="environment" multiple>
+                            <!-- Separate inputs for camera and gallery -->
+                            <input type="file" class="form-control d-none" id="image-upload-gallery" accept="image/*" multiple>
+                            <input type="file" class="form-control d-none" id="image-upload-camera" accept="image/*" capture="environment" multiple>
                             <!-- Using capture="environment" for rear camera but with additional safeguards in JS -->
                             <div id="preview-container" class="d-none">
                                 <div class="position-relative">
@@ -582,6 +584,28 @@
         </div>
     </div>
 </div>
+
+<!-- Image Source Selection Modal -->
+<div class="modal fade" id="imageSourceModal" tabindex="-1" aria-labelledby="imageSourceModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="imageSourceModalLabel">Choose Image Source</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="d-grid gap-3">
+                    <button type="button" class="btn btn-primary btn-lg" id="choose-camera">
+                        <i class="fa fa-camera me-2"></i>Take Photo
+                    </button>
+                    <button type="button" class="btn btn-outline-primary btn-lg" id="choose-gallery">
+                        <i class="fa fa-folder-open me-2"></i>Choose from Gallery
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 {% block extra_scripts %}
@@ -594,7 +618,8 @@ document.addEventListener('DOMContentLoaded', function() {
     const assignmentSelect = document.getElementById('assignment-select');
     const form = document.getElementById('upload-form');
     const addImageBtn = document.getElementById('add-image-btn');
-    const imageUpload = document.getElementById('image-upload');
+    const imageUploadGallery = document.getElementById('image-upload-gallery');
+    const imageUploadCamera = document.getElementById('image-upload-camera');
     const previewContainer = document.getElementById('preview-container');
     const previewImage = document.getElementById('preview-image');
     const prevImage = document.getElementById('prev-image');
@@ -606,6 +631,9 @@ document.addEventListener('DOMContentLoaded', function() {
     let currentImageIndex = 0;
     let uploadedImages = [];
     let currentWritingId = null;
+
+    // Image source selection modal
+    const imageSourceModal = new bootstrap.Modal(document.getElementById('imageSourceModal'));
 
 
     function updateImageNavigation() {
@@ -673,28 +701,50 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    imageUpload.addEventListener('change', function(e) {
-        if (this.files && this.files.length > 0) {
-            Array.from(this.files).forEach((file, index) => {
+    imageUploadGallery.addEventListener('change', function(e) {
+        handleImageSelection(this.files);
+    });
+
+    imageUploadCamera.addEventListener('change', function(e) {
+        handleImageSelection(this.files);
+    });
+
+    function handleImageSelection(files) {
+        if (files && files.length > 0) {
+            Array.from(files).forEach((file, index) => {
                 uploadedImages.push({
                     file: file,
                     url: URL.createObjectURL(file)
                 });
             });
-    console.log("jjjjjjjjjjjjjjjjj", uploadedImages)
+            console.log("Images uploaded:", uploadedImages);
             currentImageIndex = uploadedImages.length - 1;
             previewContainer.classList.remove('d-none');
             updateImageNavigation();
         }
-    });
+    }
 
     function updateSubmitButtonState() {
         submitBtn.disabled = uploadedImages.length === 0;
     }
 
     document.getElementById('add-more-btn').addEventListener('click', function() {
-        imageUpload.value = ''; 
-        imageUpload.click();
+        // Show modal for selecting image source
+        imageSourceModal.show();
+    });
+
+    // Handle camera selection
+    document.getElementById('choose-camera').addEventListener('click', function() {
+        imageSourceModal.hide();
+        imageUploadCamera.value = ''; 
+        imageUploadCamera.click();
+    });
+
+    // Handle gallery selection
+    document.getElementById('choose-gallery').addEventListener('click', function() {
+        imageSourceModal.hide();
+        imageUploadGallery.value = ''; 
+        imageUploadGallery.click();
     });
 
     classSelect.addEventListener('change', function() {
@@ -731,23 +781,15 @@ document.addEventListener('DOMContentLoaded', function() {
                 });
         }    });
 
-    // Upload button - trigger file selection ONCE with preventions against auto-reopening
+    // Upload button - show modal to choose between camera and gallery
     addImageBtn.addEventListener('click', (e) => {
-        e.preventDefault(); // Prevent any default action
-        e.stopPropagation(); // Stop event bubbling
+        e.preventDefault();
+        e.stopPropagation();
         
-        imageUpload.value = ''; // Clear any previous selection
+        // Show modal for selecting image source
+        imageSourceModal.show();
         
-        // Create a one-time event handler to prevent multiple triggers
-        const uploadHandler = function() {
-            imageUpload.removeEventListener('click', uploadHandler);
-            console.log("Upload dialog opened and never reopens");
-        };
-        
-        imageUpload.addEventListener('click', uploadHandler);
-        imageUpload.click();
-        
-        return false; // Prevent form submission
+        return false;
     });
 
     form.addEventListener('submit', async function(e) {
