@@ -12,12 +12,12 @@ from sqlalchemy import (
     Float,
 )
 from sqlalchemy.orm import relationship
-from database import Base
+from sqlalchemy.orm import declarative_base
 from passlib.context import CryptContext
 from werkzeug.security import generate_password_hash, check_password_hash
 
 pwd_context = CryptContext(schemes=["scrypt"], deprecated="auto")
-
+Base = declarative_base()
 
 class User(Base):
     __tablename__ = "user"
